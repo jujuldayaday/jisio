@@ -702,7 +702,9 @@ body.dark-mode .auth-panel {
 }
 
 body.dark-mode .auth-visual-card {
-  background: rgba(15, 26, 44, 0.92);
+  background: rgba(15, 26, 44, 0.78);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: var(--gold-300);
 }
 
@@ -897,33 +899,19 @@ body.dark-mode .outcome-card.cancelled { background: linear-gradient(180deg, #3a
   position: relative;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  padding: 2rem 2rem 2rem 2.5rem;
+  justify-content: center;
+  padding: 2rem;
   overflow: hidden;
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.04)),
-    url("assets/ignatius.png") 72% 58% / cover no-repeat;
-}
-
-.auth-visual::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    105deg,
-    rgba(255, 255, 255, 0.35) 0%,
-    rgba(255, 255, 255, 0.08) 42%,
-    rgba(12, 27, 62, 0.04) 68%,
-    transparent 100%
-  );
-  pointer-events: none;
+  background: url("assets/loyola.jpg") center / cover no-repeat;
 }
 
 .auth-visual-card {
   position: relative;
   z-index: 1;
   width: min(330px, 100%);
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-radius: 20px;
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16);
   padding: 2rem 1.5rem;
