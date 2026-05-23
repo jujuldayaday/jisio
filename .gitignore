@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Environment (keep example templates)
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.render.example
+
+# User-uploaded profile pictures
+assets/uploads/*
+!assets/uploads/.gitkeep
+
+# Import / temp files
+temp_import.csv
+temp_mapped.csv
+*.tmp
+*.temp
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE (optional local overrides)
+.idea/
+*.swp
+*.swo
+*~
+
+# Test / coverage
+coverage/
+.nyc_output/
