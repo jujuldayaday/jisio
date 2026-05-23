@@ -2,12 +2,17 @@
  * GCO canonical service labels (must match UI and DB `service_type` values).
  */
 const ALL_GCO_SERVICES = [
-  "Befriending",
-  "Counseling",
-  "Academic/Probation Follow up",
-  "Individual Inventory",
-  "Placement Program",
-  "Faculty/Parent Consultation"
+    "Counseling",
+    "Testing",
+    "Academic/Probation Follow up",
+    "Individual Inventory",
+    "Career and Placement Program",
+    "Enrichment Program",
+    "Peer Facilitator's Training Program",
+    "Outreach Program",
+    "Student's Internship Program",
+    "Research and Evaluation",
+    "Faculty/Parent Consultation"
 ];
 
 const BOBBY_SERVICES = ["Befriending", "Counseling", "Placement Program"];
