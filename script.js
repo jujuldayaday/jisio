@@ -2149,11 +2149,16 @@ async function renderAdminAnalyticsPage(root) {
   let selectedCollege = "";
 
   const SERVICE_OPTIONS = [
-    "Befriending",
     "Counseling",
+    "Testing",
     "Academic/Probation Follow up",
     "Individual Inventory",
-    "Placement Program",
+    "Career and Placement Program",
+    "Enrichment Program",
+    "Peer Facilitator's Training Program",
+    "Outreach Program",
+    "Student's Internship Program",
+    "Research and Evaluation",
     "Faculty/Parent Consultation"
   ];
   const allServices = Array.from(new Set([...SERVICE_OPTIONS, ...(distinct.services || [])]));
