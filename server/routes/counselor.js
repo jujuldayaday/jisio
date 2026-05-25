@@ -2,11 +2,20 @@ const express = require("express");
 const { getPool } = require("../config/db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { getCounselorSessionAnalytics } = require("../services/counselorAnalytics");
+const {
+  getFullSchedule,
+  getAvailableDateRow,
+  slotDurationMatchesSession
+} = require("../services/availabilitySchedule");
+const {
+  getDaySettings,
+  getSessionMinutesForDay,
+  upsertDaySetting
+} = require("../services/renderingDaySettings");
 
 const router = express.Router();
 router.use(requireAuth);
 
-// Counselor analytics — approved sessions (accepted) + time series for charts
 router.get("/analytics", requireRole("counselor"), async (req, res) => {
   const db = getPool();
   const data = await getCounselorSessionAnalytics(db, req.user.id);
@@ -36,7 +45,14 @@ router.get("/calendar", requireRole("student", "counselor", "admin"), async (req
      ORDER BY unavailable_date, start_time IS NULL DESC, start_time`,
     [counselorId, year]
   );
-  res.json({ year, counselorId, appointments, unavailable });
+  const [availableDates] = await db.query(
+    `SELECT id, available_date, session_duration_minutes
+     FROM counselor_available_dates
+     WHERE counselor_id = ? AND YEAR(available_date) = ?
+     ORDER BY available_date`,
+    [counselorId, year]
+  );
+  res.json({ year, counselorId, appointments, unavailable, availableDates });
 });
 
 router.get("/availability", requireRole("counselor"), async (req, res) => {
@@ -70,6 +86,20 @@ function normalizeTime(v) {
   if (!s) return null;
   if (!/^\d{2}:\d{2}(:\d{2})?$/.test(s)) return null;
   return s.length === 5 ? `${s}:00` : s;
+}
+
+function timeToMinutes(t) {
+  const s = String(t).slice(0, 5);
+  const [h, m] = s.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function timeRangesOverlap(startA, endA, startB, endB) {
+  const a0 = timeToMinutes(startA);
+  const a1 = timeToMinutes(endA);
+  const b0 = timeToMinutes(startB);
+  const b1 = timeToMinutes(endB);
+  return a0 < b1 && b0 < a1;
 }
 
 router.post("/availability", requireRole("counselor"), async (req, res) => {
@@ -136,7 +166,18 @@ router.delete("/availability/:id", requireRole("counselor"), async (req, res) =>
   res.json({ ok: true });
 });
 
-const WEEKDAY_LABELS = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+const WEEKDAY_LABELS = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function mapRenderingSlots(rows) {
+  return rows.map((r) => ({
+    id: r.id,
+    dayOfWeek: r.day_of_week,
+    dayLabel: WEEKDAY_LABELS[r.day_of_week] || `Day ${r.day_of_week}`,
+    startTime: String(r.start_time).slice(0, 5),
+    endTime: String(r.end_time).slice(0, 5),
+    createdAt: r.created_at
+  }));
+}
 
 router.get("/rendering-schedule", requireRole("counselor"), async (req, res) => {
   const db = getPool();
@@ -147,16 +188,22 @@ router.get("/rendering-schedule", requireRole("counselor"), async (req, res) => 
      ORDER BY day_of_week, start_time`,
     [req.user.id]
   );
-  res.json(
-    rows.map((r) => ({
-      id: r.id,
-      dayOfWeek: r.day_of_week,
-      dayLabel: WEEKDAY_LABELS[r.day_of_week] || `Day ${r.day_of_week}`,
-      startTime: String(r.start_time).slice(0, 5),
-      endTime: String(r.end_time).slice(0, 5),
-      createdAt: r.created_at
-    }))
-  );
+  const daySettings = await getDaySettings(db, req.user.id);
+  res.json({ slots: mapRenderingSlots(rows), daySettings });
+});
+
+router.put("/rendering-day-settings", requireRole("counselor"), async (req, res) => {
+  const dayOfWeek = Number(req.body.day_of_week);
+  const sessionMinutes = Number(req.body.session_duration_minutes);
+  if (!dayOfWeek || dayOfWeek < 1 || dayOfWeek > 6) {
+    return res.status(400).json({ message: "day_of_week must be 1 (Monday) through 6 (Saturday)." });
+  }
+  if (!sessionMinutes || sessionMinutes < 15 || sessionMinutes > 180) {
+    return res.status(400).json({ message: "session_duration_minutes must be between 15 and 180." });
+  }
+  const db = getPool();
+  await upsertDaySetting(db, req.user.id, dayOfWeek, sessionMinutes);
+  res.json({ ok: true, dayOfWeek, sessionDurationMinutes: sessionMinutes });
 });
 
 router.post("/rendering-schedule", requireRole("counselor"), async (req, res) => {
@@ -164,8 +211,8 @@ router.post("/rendering-schedule", requireRole("counselor"), async (req, res) =>
   const startT = normalizeTime(req.body.start_time);
   const endT = normalizeTime(req.body.end_time);
 
-  if (!dayOfWeek || dayOfWeek < 1 || dayOfWeek > 5) {
-    return res.status(400).json({ message: "day_of_week must be 1 (Monday) through 5 (Friday)." });
+  if (!dayOfWeek || dayOfWeek < 1 || dayOfWeek > 6) {
+    return res.status(400).json({ message: "day_of_week must be 1 (Monday) through 6 (Saturday)." });
   }
   if (!startT || !endT) {
     return res.status(400).json({ message: "start_time and end_time are required (HH:MM)." });
@@ -175,6 +222,38 @@ router.post("/rendering-schedule", requireRole("counselor"), async (req, res) =>
   }
 
   const db = getPool();
+  const sessionMinutes = await getSessionMinutesForDay(db, req.user.id, dayOfWeek);
+  if (sessionMinutes) {
+    if (!slotDurationMatchesSession(startT.slice(0, 5), endT.slice(0, 5), sessionMinutes)) {
+      return res.status(400).json({
+        message: `Time slot must span exactly ${sessionMinutes} minutes for ${WEEKDAY_LABELS[dayOfWeek]}.`
+      });
+    }
+  }
+
+  const newStart = startT.slice(0, 5);
+  const newEnd = endT.slice(0, 5);
+  const dayLabel = WEEKDAY_LABELS[dayOfWeek] || "that day";
+  const [existing] = await db.query(
+    `SELECT start_time, end_time FROM counselor_rendering_slots
+     WHERE counselor_id = ? AND day_of_week = ?`,
+    [req.user.id, dayOfWeek]
+  );
+  for (const row of existing) {
+    const exStart = String(row.start_time).slice(0, 5);
+    const exEnd = String(row.end_time).slice(0, 5);
+    if (exStart === newStart) {
+      return res.status(409).json({
+        message: `A time slot starting at ${newStart} already exists for ${dayLabel}.`
+      });
+    }
+    if (timeRangesOverlap(newStart, newEnd, exStart, exEnd)) {
+      return res.status(409).json({
+        message: `This time overlaps an existing slot (${exStart}–${exEnd}) on ${dayLabel}.`
+      });
+    }
+  }
+
   try {
     const [result] = await db.query(
       `INSERT INTO counselor_rendering_slots (counselor_id, day_of_week, start_time, end_time)
@@ -204,5 +283,157 @@ router.delete("/rendering-schedule/:id", requireRole("counselor"), async (req, r
   res.json({ ok: true });
 });
 
-module.exports = router;
+router.get("/availability-schedule", requireRole("counselor"), async (req, res) => {
+  const db = getPool();
+  const schedule = await getFullSchedule(db, req.user.id);
+  res.json(schedule);
+});
 
+router.get("/availability-schedule/:counselorId", requireRole("student", "admin", "counselor"), async (req, res) => {
+  const counselorId = Number(req.params.counselorId);
+  const db = getPool();
+  const schedule = await getFullSchedule(db, counselorId);
+  res.json(schedule);
+});
+
+router.post("/available-dates", requireRole("counselor"), async (req, res) => {
+  const availableDate = req.body.available_date ? String(req.body.available_date).slice(0, 10) : "";
+  const sessionMinutes = Number(req.body.session_duration_minutes) || 60;
+
+  if (!availableDate) return res.status(400).json({ message: "available_date is required (YYYY-MM-DD)." });
+  if (sessionMinutes < 15 || sessionMinutes > 180) {
+    return res.status(400).json({ message: "session_duration_minutes must be between 15 and 180." });
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const picked = new Date(`${availableDate}T00:00:00`);
+  if (Number.isNaN(picked.getTime())) return res.status(400).json({ message: "Invalid date." });
+  if (picked < today) return res.status(400).json({ message: "Cannot add past dates as available." });
+
+  const db = getPool();
+  try {
+    const [result] = await db.query(
+      `INSERT INTO counselor_available_dates (counselor_id, available_date, session_duration_minutes)
+       VALUES (?, ?, ?)`,
+      [req.user.id, availableDate, sessionMinutes]
+    );
+    res.status(201).json({ id: result.insertId, availableDate, sessionDurationMinutes: sessionMinutes });
+  } catch (err) {
+    if (err.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ message: "This date is already marked as available." });
+    }
+    return res.status(500).json({ message: err.message });
+  }
+});
+
+router.patch("/available-dates/:id", requireRole("counselor"), async (req, res) => {
+  const id = Number(req.params.id);
+  const sessionMinutes = Number(req.body.session_duration_minutes);
+  if (!sessionMinutes || sessionMinutes < 15 || sessionMinutes > 180) {
+    return res.status(400).json({ message: "session_duration_minutes must be between 15 and 180." });
+  }
+
+  const db = getPool();
+  const [rows] = await db.query(
+    "SELECT id, counselor_id, available_date FROM counselor_available_dates WHERE id = ?",
+    [id]
+  );
+  if (!rows[0]) return res.status(404).json({ message: "Available date not found." });
+  if (rows[0].counselor_id !== req.user.id) return res.status(403).json({ message: "Not authorized" });
+
+  await db.query(
+    "UPDATE counselor_available_dates SET session_duration_minutes = ? WHERE id = ?",
+    [sessionMinutes, id]
+  );
+  res.json({ ok: true, sessionDurationMinutes: sessionMinutes });
+});
+
+router.delete("/available-dates/:id", requireRole("counselor"), async (req, res) => {
+  const id = Number(req.params.id);
+  const db = getPool();
+  const [rows] = await db.query(
+    "SELECT id, counselor_id, available_date FROM counselor_available_dates WHERE id = ?",
+    [id]
+  );
+  if (!rows[0]) return res.status(404).json({ message: "Available date not found." });
+  if (rows[0].counselor_id !== req.user.id) return res.status(403).json({ message: "Not authorized" });
+
+  const dateKey = String(rows[0].available_date).slice(0, 10);
+  await db.query("DELETE FROM counselor_date_slots WHERE counselor_id = ? AND available_date = ?", [
+    req.user.id,
+    dateKey
+  ]);
+  await db.query("DELETE FROM counselor_available_dates WHERE id = ?", [id]);
+  res.json({ ok: true });
+});
+
+router.post("/available-slots", requireRole("counselor"), async (req, res) => {
+  const availableDate = req.body.available_date ? String(req.body.available_date).slice(0, 10) : "";
+  const startT = normalizeTime(req.body.start_time);
+  const endT = normalizeTime(req.body.end_time);
+
+  if (!availableDate) return res.status(400).json({ message: "available_date is required." });
+  if (!startT || !endT) return res.status(400).json({ message: "start_time and end_time are required (HH:MM)." });
+  if (startT >= endT) return res.status(400).json({ message: "End time must be after start time." });
+
+  const db = getPool();
+  const dateRow = await getAvailableDateRow(db, req.user.id, availableDate);
+  if (!dateRow) {
+    return res.status(400).json({ message: "Add this date as an available date before setting time slots." });
+  }
+
+  const sessionMinutes = dateRow.session_duration_minutes;
+  if (!slotDurationMatchesSession(startT.slice(0, 5), endT.slice(0, 5), sessionMinutes)) {
+    return res.status(400).json({
+      message: `Time slot must span exactly ${sessionMinutes} minutes (e.g. 09:00–${formatEndExample(startT, sessionMinutes)}).`
+    });
+  }
+
+  const [conflicts] = await db.query(
+    `SELECT id FROM appointments
+     WHERE counselor_id = ? AND appointment_date = ? AND status = 'accepted'
+       AND appointment_time >= ? AND appointment_time < ?
+     LIMIT 1`,
+    [req.user.id, availableDate, startT, endT]
+  );
+  if (conflicts.length > 0) {
+    return res.status(409).json({ message: "Cannot add slot — accepted appointment exists in this window." });
+  }
+
+  try {
+    const [result] = await db.query(
+      `INSERT INTO counselor_date_slots (counselor_id, available_date, start_time, end_time)
+       VALUES (?, ?, ?, ?)`,
+      [req.user.id, availableDate, startT, endT]
+    );
+    res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    if (err.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ message: "This time slot already exists for that date." });
+    }
+    return res.status(500).json({ message: err.message });
+  }
+});
+
+function formatEndExample(startT, sessionMinutes) {
+  const [h, m] = String(startT).slice(0, 5).split(":").map(Number);
+  const total = h * 60 + m + sessionMinutes;
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+router.delete("/available-slots/:id", requireRole("counselor"), async (req, res) => {
+  const slotId = Number(req.params.id);
+  const db = getPool();
+  const [rows] = await db.query(
+    "SELECT id, counselor_id FROM counselor_date_slots WHERE id = ?",
+    [slotId]
+  );
+  if (!rows[0]) return res.status(404).json({ message: "Time slot not found" });
+  if (rows[0].counselor_id !== req.user.id) return res.status(403).json({ message: "Not authorized" });
+
+  await db.query("DELETE FROM counselor_date_slots WHERE id = ?", [slotId]);
+  res.json({ ok: true });
+});
+
+module.exports = router;
