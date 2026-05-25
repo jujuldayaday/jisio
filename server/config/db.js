@@ -151,12 +151,49 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS counselor_rendering_slots (
       id INT AUTO_INCREMENT PRIMARY KEY,
       counselor_id INT NOT NULL,
-      day_of_week TINYINT NOT NULL COMMENT '1=Monday … 5=Friday',
+      day_of_week TINYINT NOT NULL COMMENT '1=Monday … 6=Saturday',
       start_time TIME NOT NULL,
       end_time TIME NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (counselor_id) REFERENCES users(id) ON DELETE CASCADE,
       UNIQUE KEY unique_counselor_day_start (counselor_id, day_of_week, start_time)
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS counselor_rendering_day_settings (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      counselor_id INT NOT NULL,
+      day_of_week TINYINT NOT NULL COMMENT '1=Monday … 6=Saturday',
+      session_duration_minutes TINYINT UNSIGNED NOT NULL DEFAULT 60,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (counselor_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE KEY unique_counselor_rendering_day (counselor_id, day_of_week)
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS counselor_available_dates (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      counselor_id INT NOT NULL,
+      available_date DATE NOT NULL,
+      session_duration_minutes TINYINT UNSIGNED NOT NULL DEFAULT 60,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (counselor_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE KEY unique_counselor_available_date (counselor_id, available_date)
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS counselor_date_slots (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      counselor_id INT NOT NULL,
+      available_date DATE NOT NULL,
+      start_time TIME NOT NULL,
+      end_time TIME NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (counselor_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE KEY unique_counselor_date_start (counselor_id, available_date, start_time)
     )
   `);
 
