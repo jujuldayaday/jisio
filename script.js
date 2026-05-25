@@ -831,16 +831,39 @@ function showToast(message) {
 }
 
 function buildYearCalendar(year, appointments, unavailable, options = {}) {
-  const { disableWeekendBooking } = options;
+  const { disableWeekendBooking, scheduleByDate, activeDate = "", selectedDates = [] } = options;
+  const selectedSet = new Set(Array.isArray(selectedDates) ? selectedDates : []);
+  const counselorMode = Boolean(scheduleByDate);
   const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const week = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
   const todayIso = new Date().toISOString().slice(0, 10);
+
   const fullDayBlocks = unavailable.filter((u) => !u.start_time && !u.end_time);
   const unavailableMap = new Map(fullDayBlocks.map((u) => [String(u.unavailable_date).slice(0, 10), u]));
   const partialDates = new Set(
     unavailable.filter((u) => u.start_time || u.end_time).map((u) => String(u.unavailable_date).slice(0, 10))
   );
   const appointmentDates = new Set(appointments.map((a) => String(a.appointment_date).slice(0, 10)));
+
+  const unavailableByDate = new Map();
+  const appointmentByDate = new Map();
+  if (counselorMode) {
+    for (const u of unavailable || []) {
+      const key = normalizeCounselorDateKey(u.unavailable_date);
+      if (!key) continue;
+      if (!unavailableByDate.has(key)) unavailableByDate.set(key, []);
+      unavailableByDate.get(key).push(u);
+    }
+    for (const a of appointments || []) {
+      const key = normalizeCounselorDateKey(a.appointment_date);
+      if (!key) continue;
+      if (!appointmentByDate.has(key)) appointmentByDate.set(key, []);
+      appointmentByDate.get(key).push(a);
+    }
+  }
+
+  const counselorMeta = { scheduleByDate, unavailableByDate, appointmentByDate };
+
   return monthNames
     .map((monthName, monthIndex) => {
       const firstDay = new Date(year, monthIndex, 1).getDay();
@@ -851,19 +874,31 @@ function buildYearCalendar(year, appointments, unavailable, options = {}) {
         const iso = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
         const dow = new Date(year, monthIndex, day).getDay();
         const isWeekend = dow === 0 || dow === 6;
-        const classes = ["month-day"];
-        if (disableWeekendBooking && isWeekend) classes.push("weekend-no-book");
-        else if (unavailableMap.has(iso)) classes.push("unavailable");
-        else if (iso === todayIso) classes.push("today");
-        else if (appointmentDates.has(iso) || partialDates.has(iso)) classes.push("booked");
+        let classes = ["month-day", "calendar-day-btn"];
         let title = "";
-        if (disableWeekendBooking && isWeekend) {
-          title = "No bookings on weekends";
-        } else if (unavailableMap.has(iso)) title = unavailableMap.get(iso).message || "Unavailable";
-        else if (partialDates.has(iso)) title = "Partially blocked — open the day to see available times";
-        else if (appointmentDates.has(iso)) title = "With appointments";
-        else title = "Available";
-        cells.push(`<button type="button" class="${classes.join(" ")} calendar-day-btn" data-date="${iso}" title="${escapeHtml(title)}">${day}</button>`);
+
+        if (counselorMode) {
+          const { status, title: statusTitle, partialBlocked } = getCounselorDayStatus(iso, counselorMeta);
+          classes.push(`day-${status}`);
+          title = statusTitle;
+          if (partialBlocked) classes.push("day-partial-blocked");
+          if (iso === todayIso) classes.push("today");
+          if (activeDate && iso === activeDate) classes.push("day-active");
+          if (selectedSet.has(iso)) classes.push("day-selected");
+        } else {
+          classes = ["month-day", "calendar-day-btn"];
+          if (disableWeekendBooking && isWeekend) classes.push("weekend-no-book");
+          else if (unavailableMap.has(iso)) classes.push("unavailable");
+          else if (iso === todayIso) classes.push("today");
+          else if (appointmentDates.has(iso) || partialDates.has(iso)) classes.push("booked");
+          if (disableWeekendBooking && isWeekend) title = "No bookings on weekends";
+          else if (unavailableMap.has(iso)) title = unavailableMap.get(iso).message || "Unavailable";
+          else if (partialDates.has(iso)) title = "Partially blocked — open the day to see available times";
+          else if (appointmentDates.has(iso)) title = "With appointments";
+          else title = "Available";
+        }
+
+        cells.push(`<button type="button" class="${classes.join(" ")}" data-date="${iso}" title="${escapeHtml(title)}">${day}</button>`);
       }
       return `
         <div class="month-card">
@@ -878,159 +913,520 @@ function buildYearCalendar(year, appointments, unavailable, options = {}) {
 
 const SESSION_DURATION_OPTIONS = [30, 40, 45, 60, 90];
 
-const RENDERING_WEEKDAYS = [
-  { value: 1, label: "Monday" },
-  { value: 2, label: "Tuesday" },
-  { value: 3, label: "Wednesday" },
-  { value: 4, label: "Thursday" },
-  { value: 5, label: "Friday" },
-  { value: 6, label: "Saturday" }
-];
-
-function formatRenderingDuration(start, end) {
-  const [sh, sm] = start.split(":").map(Number);
-  const [eh, em] = end.split(":").map(Number);
-  const mins = eh * 60 + em - (sh * 60 + sm);
-  return mins > 0 ? `${mins} min` : "";
+function timeToMinutes(hhmm) {
+  const [h, m] = String(hhmm).slice(0, 5).split(":").map(Number);
+  return h * 60 + m;
 }
 
-function addMinutesToTime(hhmm, minutes) {
-  const [h, m] = hhmm.split(":").map(Number);
-  const total = h * 60 + m + minutes;
-  const eh = String(Math.floor(total / 60)).padStart(2, "0");
-  const em = String(total % 60).padStart(2, "0");
-  return `${eh}:${em}`;
+function minutesToTime(total) {
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-function renderingSlotConflict(slots, day, startTime, endTime) {
-  const toMin = (t) => {
-    const [h, m] = t.split(":").map(Number);
-    return h * 60 + m;
-  };
-  const a0 = toMin(startTime);
-  const a1 = toMin(endTime);
-  for (const s of slots) {
-    if (s.dayOfWeek !== day) continue;
-    if (s.startTime === startTime) {
-      return `A time slot starting at ${startTime} already exists for this day.`;
-    }
-    const b0 = toMin(s.startTime);
-    const b1 = toMin(s.endTime);
-    if (a0 < b1 && b0 < a1) {
-      return `This time overlaps an existing slot (${s.startTime}–${s.endTime}).`;
+function deriveLunchBreaksFromWindows(windows) {
+  if (!windows || windows.length < 2) return [{ start: "12:00", end: "13:00" }];
+  const sorted = [...windows].sort((a, b) => timeToMinutes(a.start) - timeToMinutes(b.start));
+  const breaks = [];
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const gapStart = sorted[i].end;
+    const gapEnd = sorted[i + 1].start;
+    if (timeToMinutes(gapEnd) > timeToMinutes(gapStart)) {
+      breaks.push({ start: gapStart, end: gapEnd });
     }
   }
+  return breaks.length ? breaks : [{ start: "12:00", end: "13:00" }];
+}
+
+function getBookableSegments(rangeStart, rangeEnd, breaks) {
+  let segments = [{ start: timeToMinutes(rangeStart), end: timeToMinutes(rangeEnd) }];
+  for (const br of breaks || []) {
+    const b0 = timeToMinutes(br.start);
+    const b1 = timeToMinutes(br.end);
+    const next = [];
+    for (const seg of segments) {
+      if (b1 <= seg.start || b0 >= seg.end) {
+        next.push(seg);
+        continue;
+      }
+      if (b0 > seg.start) next.push({ start: seg.start, end: Math.min(b0, seg.end) });
+      if (b1 < seg.end) next.push({ start: Math.max(b1, seg.start), end: seg.end });
+    }
+    segments = next.filter((s) => s.end > s.start);
+  }
+  return segments.map((s) => ({ start: minutesToTime(s.start), end: minutesToTime(s.end) }));
+}
+
+function generateConsecutiveSlotsPreview(dayStart, dayEnd, sessionMinutes, applyLunchBreak, lunchBreaks, slotIntervalMinutes = 0) {
+  if (!dayStart || !dayEnd || !sessionMinutes) return [];
+  if (timeToMinutes(dayEnd) <= timeToMinutes(dayStart)) return [];
+  const breaks = applyLunchBreak ? lunchBreaks : [];
+  const gap = Math.max(0, Number(slotIntervalMinutes) || 0);
+  const step = sessionMinutes + gap;
+  const segments = getBookableSegments(dayStart, dayEnd, breaks);
+  const slots = [];
+  for (const seg of segments) {
+    let t = timeToMinutes(seg.start);
+    const segEnd = timeToMinutes(seg.end);
+    while (t + sessionMinutes <= segEnd) {
+      slots.push({ start: minutesToTime(t), end: minutesToTime(t + sessionMinutes) });
+      t += step;
+    }
+  }
+  return slots;
+}
+
+function formatUnavailTime(t) {
+  if (t == null || t === "") return "";
+  return String(t).slice(0, 5);
+}
+
+function getPartialUnavailBlocks(blocks) {
+  return (blocks || [])
+    .filter((b) => b.start_time || b.end_time)
+    .map((b) => ({
+      start: formatUnavailTime(b.start_time) || "00:00",
+      end: formatUnavailTime(b.end_time) || "23:59",
+      message: b.message || ""
+    }));
+}
+
+function timeRangesOverlapClient(startA, endA, startB, endB) {
+  return timeToMinutes(startA) < timeToMinutes(endB) && timeToMinutes(startB) < timeToMinutes(endA);
+}
+
+function slotOverlapsUnavail(slotStart, slotEnd, blocks) {
+  return getPartialUnavailBlocks(blocks).some((b) => timeRangesOverlapClient(slotStart, slotEnd, b.start, b.end));
+}
+
+function formatPartialUnavailLabel(blocks) {
+  return getPartialUnavailBlocks(blocks)
+    .map((b) => {
+      const range = `${b.start}–${b.end}`;
+      return b.message ? `${range} (${b.message})` : range;
+    })
+    .join("; ");
+}
+
+function getCounselorDayStatus(iso, { scheduleByDate, unavailableByDate, appointmentByDate }) {
+  const blocks = unavailableByDate.get(iso) || [];
+  const fullBlock = blocks.some((b) => !b.start_time && !b.end_time);
+  if (fullBlock) return { status: "unavailable", partialBlocked: false, title: "Unavailable — blocked all day" };
+
+  const partialBlocks = getPartialUnavailBlocks(blocks);
+  const partialLabel = partialBlocks.length ? formatPartialUnavailLabel(blocks) : "";
+
+  const entry = scheduleByDate.get(iso);
+  const slots = entry?.slots || [];
+  if (!slots.length) {
+    if (partialBlocks.length) {
+      return {
+        status: "partial-blocked",
+        partialBlocked: true,
+        title: `Unavailable times set: ${partialLabel}`
+      };
+    }
+    return { status: "unset", partialBlocked: false, title: "No availability set for this date" };
+  }
+
+  const appts = (appointmentByDate.get(iso) || []).filter((a) =>
+    ["accepted", "pending", "reschedule_requested"].includes(a.status)
+  );
+  const bookedStarts = new Set(appts.map((a) => String(a.appointment_time).slice(0, 5)));
+  const blockedSlots = slots.filter((s) => slotOverlapsUnavail(s.startTime, s.endTime, blocks));
+  const allBooked = slots.every((s) => bookedStarts.has(s.startTime));
+  if (allBooked && slots.length > 0) {
+    const extra = partialBlocks.length ? ` · Unavailable: ${partialLabel}` : "";
+    return {
+      status: "fully-booked",
+      partialBlocked: partialBlocks.length > 0,
+      title: `Fully booked — all slots taken${extra}`
+    };
+  }
+
+  const open = slots.length - slots.filter((s) => bookedStarts.has(s.startTime)).length;
+  const blockedNote =
+    blockedSlots.length > 0
+      ? ` · ${blockedSlots.length} slot(s) blocked (${partialLabel})`
+      : partialBlocks.length
+        ? ` · Unavailable: ${partialLabel}`
+        : "";
+  return {
+    status: "has-slots",
+    partialBlocked: partialBlocks.length > 0,
+    title: `${slots.length} slot(s), ${open} open for booking${blockedNote}`
+  };
+}
+
+function getActiveAvailDate() {
+  const input = document.getElementById("availDate")?.value?.trim();
+  return input || state.counselorAvailDate || "";
+}
+
+function getSelectedAvailDates() {
+  const picked = Array.isArray(state.counselorAvailDates) ? [...state.counselorAvailDates] : [];
+  if (picked.length) return picked.sort();
+  const single = getActiveAvailDate();
+  return single ? [single] : [];
+}
+
+function toggleCounselorAvailDate(date) {
+  if (!date) return;
+  if (!Array.isArray(state.counselorAvailDates)) state.counselorAvailDates = [];
+  const idx = state.counselorAvailDates.indexOf(date);
+  if (idx >= 0) state.counselorAvailDates.splice(idx, 1);
+  else state.counselorAvailDates.push(date);
+  state.counselorAvailDates.sort();
+}
+
+function renderSelectedDateChips() {
+  const el = document.getElementById("selectedDatesChips");
+  if (!el) return;
+  const dates = state.counselorAvailDates || [];
+  if (!dates.length) {
+    el.innerHTML = '<span class="muted tiny">Click calendar days below to select one or more dates (gold outline).</span>';
+    return;
+  }
+  el.innerHTML = dates
+    .map(
+      (d) =>
+        `<span class="date-chip">${escapeHtml(d)}<button type="button" class="date-chip-remove" data-date="${d}" aria-label="Remove ${escapeHtml(d)}">×</button></span>`
+    )
+    .join("");
+  el.querySelectorAll(".date-chip-remove").forEach((btn) => {
+    btn.onclick = () => {
+      toggleCounselorAvailDate(btn.dataset.date);
+      syncCounselorCalendarSelection(state.counselorCalendarCtx);
+      renderSelectedDateChips();
+    };
+  });
+}
+
+function syncCounselorCalendarSelection(ctx) {
+  const selected = new Set(state.counselorAvailDates || []);
+  const active = getActiveAvailDate();
+  document.querySelectorAll(".counselor-availability-calendar .calendar-day-btn").forEach((btn) => {
+    const iso = btn.dataset.date;
+    btn.classList.toggle("day-selected", selected.has(iso));
+    btn.classList.toggle("day-active", iso === active);
+  });
+  if (ctx) updateCalendarDayColors(ctx);
+}
+
+function bindCounselorCalendarDayClicks(ctx) {
+  document.querySelectorAll(".counselor-availability-calendar .calendar-day-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const date = btn.dataset.date;
+      if (!date) return;
+      toggleCounselorAvailDate(date);
+      selectCounselorCalendarDay(date, ctx);
+      renderSelectedDateChips();
+      syncCounselorCalendarSelection(ctx);
+    });
+  });
+}
+
+function normalizeCounselorDateKey(val) {
+  if (!val) return "";
+  const s = String(val);
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) return m[1];
+  const parsed = new Date(s);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return s.slice(0, 10);
+}
+
+function buildCounselorCalendarCtx(dateSchedule, calendar) {
+  const scheduleByDate = new Map();
+  for (const d of dateSchedule || []) {
+    const key = normalizeCounselorDateKey(d.availableDate || d.available_date);
+    if (!key) continue;
+    scheduleByDate.set(key, {
+      ...d,
+      availableDate: key,
+      slots: (d.slots || []).map((s) => ({
+        ...s,
+        startTime: String(s.startTime || s.start_time || "").slice(0, 5),
+        endTime: String(s.endTime || s.end_time || "").slice(0, 5)
+      }))
+    });
+  }
+  const unavailableByDate = new Map();
+  const appointmentByDate = new Map();
+  for (const u of calendar?.unavailable || []) {
+    const key = normalizeCounselorDateKey(u.unavailable_date);
+    if (!key) continue;
+    if (!unavailableByDate.has(key)) unavailableByDate.set(key, []);
+    unavailableByDate.get(key).push(u);
+  }
+  for (const a of calendar?.appointments || []) {
+    const key = String(a.appointment_date).slice(0, 10);
+    if (!appointmentByDate.has(key)) appointmentByDate.set(key, []);
+    appointmentByDate.get(key).push(a);
+  }
+  return { scheduleByDate, unavailableByDate, appointmentByDate };
+}
+
+function renderCounselorSlotChip(slot, blocks) {
+  const range = formatSlotRange(slot.startTime, slot.endTime);
+  const blocked = slotOverlapsUnavail(slot.startTime, slot.endTime, blocks);
+  if (!blocked) return `<span class="slot-chip">${escapeHtml(range)}</span>`;
+  return `<span class="slot-chip slot-chip--blocked" title="Blocked via Add Unavailable">${escapeHtml(range)}<span class="slot-blocked-tag">Unavailable</span></span>`;
+}
+
+function renderCounselorSlotListItem(slot, blocks) {
+  const range = formatSlotRange(slot.startTime, slot.endTime);
+  const blocked = slotOverlapsUnavail(slot.startTime, slot.endTime, blocks);
+  if (!blocked) return `<li>${escapeHtml(range)}</li>`;
+  return `<li class="saved-slot-list__blocked">${escapeHtml(range)} <span class="slot-blocked-tag">Unavailable</span></li>`;
+}
+
+function renderCounselorDayPanel(date, ctx) {
+  const panel = document.getElementById("counselorDayView");
+  const savedTitle = document.getElementById("savedSlotsTitle");
+  const savedContent = document.getElementById("savedSlotsContent");
+  if (!panel) return;
+
+  const { scheduleByDate, unavailableByDate, appointmentByDate } = ctx;
+  const blocks = unavailableByDate.get(date) || [];
+  const fullBlock = blocks.some((b) => !b.start_time && !b.end_time);
+  const partialBlocks = getPartialUnavailBlocks(blocks);
+  const entry = scheduleByDate.get(date);
+  const slots = entry?.slots || [];
+  const appts = (appointmentByDate.get(date) || []).filter((a) =>
+    ["accepted", "pending", "reschedule_requested"].includes(a.status)
+  );
+
+  if (savedTitle) savedTitle.textContent = `Saved slots — ${date}`;
+  if (savedContent) {
+    savedContent.innerHTML = slots.length
+      ? `<ul class="saved-slot-list">${slots.map((s) => renderCounselorSlotListItem(s, blocks)).join("")}</ul>`
+      : `<p class="muted tiny">No slots saved for this date.</p>`;
+  }
+
+  const unavailSection = partialBlocks.length
+    ? `<div class="day-view-unavail">
+        <h5 class="avail-subtitle">Blocked times <span class="muted tiny">(Add Unavailable)</span></h5>
+        <div class="day-view-unavail-chips">${partialBlocks
+          .map((b) => {
+            const label = formatSlotRange(b.start, b.end);
+            const note = b.message ? ` — ${escapeHtml(b.message)}` : "";
+            return `<span class="unavail-chip" title="Set via Add Unavailable">${escapeHtml(label)}${note}</span>`;
+          })
+          .join("")}</div>
+      </div>`
+    : "";
+
+  panel.innerHTML = `
+    <div class="day-view-header">
+      <strong>${escapeHtml(date)}</strong>
+      <span class="muted tiny">${escapeHtml(weekdayLabelForDate(date))}</span>
+    </div>
+    ${
+      fullBlock
+        ? `<p class="feedback feedback-error">Unavailable — ${escapeHtml(blocks.find((b) => !b.start_time && !b.end_time)?.message || "blocked all day")}</p>`
+        : slots.length
+          ? `<div class="day-view-slots">${slots.map((s) => renderCounselorSlotChip(s, blocks)).join("")}</div>`
+          : partialBlocks.length
+            ? `<p class="muted">No bookable slots generated; unavailable times are set below.</p>`
+            : `<p class="muted">No availability set for this date. Use the form above to generate slots.</p>`
+    }
+    ${unavailSection}
+    ${
+      appts.length
+        ? `<div class="day-view-appointments"><h5 class="avail-subtitle">Appointments</h5><ul class="saved-slot-list">${appts
+            .map(
+              (a) =>
+                `<li>${String(a.appointment_time).slice(0, 5)} — ${escapeHtml(a.service_type || "Session")} <em>(${escapeHtml(a.status)})</em></li>`
+            )
+            .join("")}</ul></div>`
+        : ""
+    }
+  `;
+}
+
+function setActiveCalendarDay(date) {
+  document.querySelectorAll(".counselor-availability-calendar .calendar-day-btn").forEach((btn) => {
+    btn.classList.toggle("day-active", btn.dataset.date === date);
+  });
+}
+
+function updateCalendarDayColors(ctx) {
+  const meta = ctx;
+  document.querySelectorAll(".counselor-availability-calendar .calendar-day-btn").forEach((btn) => {
+    const iso = btn.dataset.date;
+    if (!iso) return;
+    const { status, partialBlocked } = getCounselorDayStatus(iso, meta);
+    btn.classList.remove(
+      "day-has-slots",
+      "day-unset",
+      "day-fully-booked",
+      "day-unavailable",
+      "day-partial-blocked"
+    );
+    btn.classList.add(`day-${status}`);
+    btn.classList.toggle("day-partial-blocked", partialBlocked);
+  });
+}
+
+function selectCounselorCalendarDay(date, ctx) {
+  if (!date) return;
+  state.counselorAvailDate = date;
+  const dateInput = document.getElementById("availDate");
+  if (dateInput) dateInput.value = date;
+  setActiveCalendarDay(date);
+  renderCounselorDayPanel(date, ctx);
+  const entry = ctx.scheduleByDate.get(date);
+  if (entry?.sessionDurationMinutes) {
+    const sel = document.getElementById("availSessionDuration");
+    const mins = entry.sessionDurationMinutes;
+    if (sel && SESSION_DURATION_OPTIONS.includes(mins)) sel.value = String(mins);
+    else if (sel) {
+      sel.value = "custom";
+      const custom = document.getElementById("availCustomSessionMinutes");
+      if (custom) custom.value = mins;
+      document.getElementById("availCustomSessionWrap")?.classList.remove("hidden");
+    }
+  }
+  if (typeof window.__counselorUpdatePreview === "function") window.__counselorUpdatePreview();
+}
+
+async function apiGenerateAvailabilitySlots(payload) {
+  return api("/counselor/available-dates/generate-slots", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+async function apiClearAvailabilityDate(date) {
+  return api(`/counselor/available-dates/by-date/${encodeURIComponent(date)}`, {
+    method: "DELETE"
+  });
+}
+
+function validateAvailabilityForm({ dates, dayStart, dayEnd, sessionMinutes, slotInterval }) {
+  if (!dates.length) return "Select at least one date on the calendar (gold outline) or use the date field.";
+  const today = new Date().toISOString().slice(0, 10);
+  for (const d of dates) {
+    if (d < today) return `Cannot set availability for past date: ${d}.`;
+  }
+  if (!dayStart || !dayEnd) return "Day start and end times are required.";
+  if (dayStart >= dayEnd) return "Day end must be after day start.";
+  if (!sessionMinutes || sessionMinutes < 15 || sessionMinutes > 180) {
+    return "Session length must be between 15 and 180 minutes.";
+  }
+  if (slotInterval < 0 || slotInterval > 120) return "Interval between slots must be between 0 and 120 minutes.";
   return null;
+}
+
+function formatSlotRange(start, end) {
+  return `${start}–${end}`;
+}
+
+function weekdayLabelForDate(isoDate) {
+  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const dow = new Date(`${isoDate}T12:00:00`).getDay();
+  return names[dow] || "";
 }
 
 async function renderCounselorCalendar(root) {
   stopCounselorCalendarPolling();
   const year = state.calendarYear || new Date().getFullYear();
-  const [calendar, availability, scheduleRes] = await Promise.all([
+  const [calendar, availability, dateSchedule, bookingProfile] = await Promise.all([
     api(`/counselor/calendar?year=${year}`),
     api("/counselor/availability"),
-    api("/counselor/rendering-schedule")
+    api("/counselor/availability-schedule"),
+    api("/counselor/booking-profile")
   ]);
-  const renderingSchedule = Array.isArray(scheduleRes) ? scheduleRes : scheduleRes.slots || [];
-  const daySettingsList = scheduleRes.daySettings || [];
-  const daySettingsMap = new Map(daySettingsList.map((d) => [d.dayOfWeek, d.sessionDurationMinutes]));
+  const scheduleByDate = new Map((dateSchedule || []).map((d) => [d.availableDate, d]));
+  const lunchBreaks = deriveLunchBreaksFromWindows(bookingProfile?.windows);
+  const lunchLabel = lunchBreaks.map((b) => `${b.start}–${b.end}`).join(", ");
+  const defaultDayStart = bookingProfile?.windows?.[0]?.start || "08:00";
+  const defaultDayEnd = bookingProfile?.windows?.[bookingProfile.windows.length - 1]?.end || "16:00";
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  const primaryDate = state.counselorAvailDate || todayIso;
+  state.counselorAvailDate = primaryDate;
+  if (!Array.isArray(state.counselorAvailDates)) state.counselorAvailDates = [];
+  const calendarCtx = buildCounselorCalendarCtx(dateSchedule, calendar);
+  state.counselorCalendarCtx = calendarCtx;
+  const selectedDates = state.counselorAvailDates;
+
+  const selectedEntry = scheduleByDate.get(primaryDate);
+  const selectedSession = selectedEntry?.sessionDurationMinutes || bookingProfile?.sessionMinutes || 60;
   state.counselorUnavail = availability;
   const refreshedAt = new Date();
-  let activeDay = state.counselorActiveWeekday || RENDERING_WEEKDAYS[0].value;
-
-  const resolveSessionMinutes = (selectEl, customEl) => {
-    if (selectEl.value === "custom") return Number(customEl?.value) || 0;
-    return Number(selectEl.value);
-  };
-
-  const wireSessionDurationSelect = (selectId, customWrapId, customInputId) => {
-    const sel = document.getElementById(selectId);
-    const wrap = document.getElementById(customWrapId);
-    const custom = document.getElementById(customInputId);
-    if (!sel || !wrap) return;
-    const toggle = () => wrap.classList.toggle("hidden", sel.value !== "custom");
-    sel.onchange = toggle;
-    toggle();
-  };
-
-  const renderAvailabilityPanel = () => {
-    const activeLabel = RENDERING_WEEKDAYS.find((d) => d.value === activeDay)?.label || "Day";
-    const sessionMins = daySettingsMap.get(activeDay) || 60;
-    const daySlots = renderingSchedule.filter((s) => s.dayOfWeek === activeDay);
-    const dayTabs = RENDERING_WEEKDAYS.map((d) => {
-      const cls = d.value === activeDay ? "availability-tab availability-tab-active" : "availability-tab";
-      return `<button type="button" class="${cls}" data-day="${d.value}">${d.label}</button>`;
-    }).join("");
-
-    const slotsTable = daySlots.length
-      ? `<table>
-          <thead><tr><th>Start</th><th>End</th><th>Duration</th><th></th></tr></thead>
-          <tbody>
-            ${daySlots
-              .map((s) => {
-                const dur = formatRenderingDuration(s.startTime, s.endTime);
-                return `<tr>
-                  <td>${escapeHtml(s.startTime)}</td>
-                  <td>${escapeHtml(s.endTime)}</td>
-                  <td>${dur || "—"}</td>
-                  <td class="col-action"><button type="button" class="btn ghost remove-rendering" data-id="${s.id}">Remove</button></td>
-                </tr>`;
-              })
-              .join("")}
-          </tbody>
-        </table>`
-      : `<div class="availability-empty"><p>No time slots for ${escapeHtml(activeLabel)} yet.</p><p class="muted tiny">Add a start time below — end time is set from session length.</p></div>`;
-
-    return `
-      <div class="availability-editor">
-        <div class="availability-week-tabs" id="weekdayChips" role="tablist" aria-label="Weekday">${dayTabs}</div>
-        <section class="availability-day-panel" aria-labelledby="availabilityDayHeading">
-          <header class="availability-day-panel__head">
-            <h4 id="availabilityDayHeading">${escapeHtml(activeLabel)}</h4>
-            <p class="muted tiny">Session length applies to every ${escapeHtml(activeLabel)}. End time is calculated automatically.</p>
-          </header>
-          <div class="availability-day-panel__controls">
-            <div class="availability-control-block">
-              <label class="field">
-                <span>Session length</span>
-                <select id="renderingSessionDuration">
-                  ${SESSION_DURATION_OPTIONS.map(
-                    (m) => `<option value="${m}"${m === sessionMins ? " selected" : ""}>${m} min</option>`
-                  ).join("")}
-                  <option value="custom"${!SESSION_DURATION_OPTIONS.includes(sessionMins) ? " selected" : ""}>Custom</option>
-                </select>
-              </label>
-              <label class="field${SESSION_DURATION_OPTIONS.includes(sessionMins) ? " hidden" : ""}" id="renderingCustomSessionWrap">
-                <span>Custom (min)</span>
-                <input type="number" id="renderingCustomSessionMinutes" min="15" max="180" step="5" value="${sessionMins}" />
-              </label>
-            </div>
-            <form id="renderingSlotForm" class="availability-control-block availability-control-block--slot">
-              <label class="field">
-                <span>Start time</span>
-                <input type="time" id="renderingStart" required />
-              </label>
-              <button class="btn primary" type="submit">Add slot</button>
-            </form>
-          </div>
-          <p id="renderingDayMsg" class="feedback"></p>
-          <p id="renderingMsg" class="feedback"></p>
-          <div class="availability-slots-card table-wrap">${slotsTable}</div>
-        </section>
-      </div>`;
-  };
 
   root.innerHTML = `
     <div class="panel-header">
       <div>
         <h2 class="section-title">Calendar and Availability</h2>
-        <p class="muted">Set your weekly availability by weekday, block unavailable dates, and view your yearly calendar.</p>
+        <p class="muted">Select dates on the calendar, set hours, then generate bookable slots for students.</p>
         <p class="muted tiny">Last updated: ${refreshedAt.toLocaleTimeString()}</p>
       </div>
     </div>
     <div class="card stack-md section-block">
       <h3>Set Availability</h3>
-      <div id="availabilityPanel" class="stack-md">${renderAvailabilityPanel()}</div>
+      <p class="muted tiny">Select one or more dates on the calendar below, configure hours, then generate slots.</p>
+      <div id="selectedDatesChips" class="selected-dates-chips"></div>
+      <div class="avail-layout">
+        <form id="dateAvailabilityForm" class="avail-form stack-md">
+          <label class="field">
+            <span>Active date (view slots)</span>
+            <input type="date" id="availDate" value="${primaryDate}" min="${todayIso}" required />
+          </label>
+          <div class="avail-fields-grid">
+            <label class="field">
+              <span>Session length</span>
+              <select id="availSessionDuration">
+                ${SESSION_DURATION_OPTIONS.map(
+                  (m) => `<option value="${m}"${m === selectedSession ? " selected" : ""}>${m} min</option>`
+                ).join("")}
+                <option value="custom"${!SESSION_DURATION_OPTIONS.includes(selectedSession) ? " selected" : ""}>Custom</option>
+              </select>
+            </label>
+            <label class="field${SESSION_DURATION_OPTIONS.includes(selectedSession) ? " hidden" : ""}" id="availCustomSessionWrap">
+              <span>Custom (min)</span>
+              <input type="number" id="availCustomSessionMinutes" min="15" max="180" step="5" value="${selectedSession}" />
+            </label>
+            <label class="field">
+              <span>Interval between slots</span>
+              <select id="availSlotInterval">
+                <option value="0" selected>None (back-to-back)</option>
+                <option value="5">5 min</option>
+                <option value="10">10 min</option>
+                <option value="15">15 min</option>
+                <option value="20">20 min</option>
+                <option value="30">30 min</option>
+              </select>
+            </label>
+          </div>
+          <div class="availability-time-row">
+            <label class="field"><span>Day starts</span><input type="time" id="availDayStart" value="${defaultDayStart}" required /></label>
+            <label class="field"><span>Day ends</span><input type="time" id="availDayEnd" value="${defaultDayEnd}" required /></label>
+          </div>
+          <label class="checkbox-card">
+            <input type="checkbox" id="availApplyLunch" checked />
+            <span class="checkbox-card__text">Skip lunch break <strong>(${escapeHtml(lunchLabel)})</strong></span>
+          </label>
+        </form>
+        <div class="avail-preview stack-md">
+          <div class="avail-preview-block">
+            <h4 class="avail-subtitle">Preview</h4>
+            <p class="muted tiny" id="availPreviewMeta">Adjust settings to preview slots</p>
+            <div id="availSlotPreview" class="slot-preview-list slot-preview-list--scroll"></div>
+          </div>
+          <div class="avail-preview-block">
+            <h4 class="avail-subtitle" id="savedSlotsTitle">Saved slots — ${escapeHtml(primaryDate)}</h4>
+            <div id="savedSlotsContent"></div>
+          </div>
+        </div>
+      </div>
+      <div class="avail-actions avail-actions--footer">
+        <button class="btn primary" type="button" id="generateSlotsBtn">Generate slots</button>
+        <button class="btn ghost" type="button" id="clearAvailDateBtn">Clear selected dates</button>
+      </div>
+      <p id="availGenerateMsg" class="feedback" role="status"></p>
     </div>
     <div class="card stack-md section-block">
       <h3>Add Unavailable Date / Time</h3>
@@ -1061,156 +1457,233 @@ async function renderCounselorCalendar(root) {
         </tbody>
       </table>` : `<p class="muted">No unavailable dates yet.</p>`}
     </div>
-    <div class="year-header">
-      <div class="year-nav">
-        <button class="btn ghost" id="prevYearBtn">‹</button>
-        <strong>${year}</strong>
-        <button class="btn ghost" id="nextYearBtn">›</button>
-      </div>
-      <div class="calendar-legend">
-        <span><i class="dot available"></i>Available</span>
-        <span><i class="dot booked"></i>With appointments</span>
-        <span><i class="dot unavailable"></i>Unavailable</span>
-        <span><i class="dot today"></i>Today</span>
-      </div>
-    </div>
-    <div class="year-calendar-grid">${buildYearCalendar(year, calendar.appointments || [], calendar.unavailable || [])}</div>
-    <div id="calendarDayModal" class="modal hidden" aria-hidden="true">
-      <div class="modal-content">
-        <h3 id="dayModalTitle">Day details</h3>
-        <div id="dayModalBody" class="stack-md"></div>
-        <div class="auth-actions">
-          <button class="btn ghost" id="closeDayModal">Close</button>
+    <div class="card stack-md section-block availability-calendar-card">
+      <div class="year-header">
+        <div class="year-nav">
+          <button class="btn ghost" id="prevYearBtn" type="button" aria-label="Previous year">‹</button>
+          <strong>${year}</strong>
+          <button class="btn ghost" id="nextYearBtn" type="button" aria-label="Next year">›</button>
+        </div>
+        <div class="calendar-legend calendar-legend--counselor">
+          <span><i class="dot has-slots"></i>Open slots</span>
+          <span><i class="dot unset"></i>Not set</span>
+          <span><i class="dot fully-booked"></i>Fully booked</span>
+          <span><i class="dot blocked"></i>Unavailable (all day)</span>
+          <span><i class="dot partial-blocked"></i>Unavailable times set</span>
+          <span><i class="dot today"></i>Today</span>
+          <span><i class="dot selected"></i>Selected</span>
         </div>
       </div>
+      <p class="muted tiny">Click a day to select/deselect it (gold) and view its time slots. Double-click is not required.</p>
+      <div class="year-calendar-grid counselor-availability-calendar">${buildYearCalendar(
+        year,
+        calendar.appointments || [],
+        calendar.unavailable || [],
+        { scheduleByDate, activeDate: primaryDate, selectedDates }
+      )}</div>
+      <div id="counselorDayView" class="counselor-day-view"></div>
     </div>
   `;
 
-  const bindAvailabilityPanel = () => {
-    wireSessionDurationSelect("renderingSessionDuration", "renderingCustomSessionWrap", "renderingCustomSessionMinutes");
-
-    const readUiSessionMinutes = () => {
-      const sel = document.getElementById("renderingSessionDuration");
-      return resolveSessionMinutes(sel, document.getElementById("renderingCustomSessionMinutes"));
-    };
-
-    let sessionSaveTimer = null;
-    const persistSessionLength = async (opts = {}) => {
-      const { silent = false } = opts;
-      const mins = readUiSessionMinutes();
-      const msg = document.getElementById("renderingDayMsg");
-      if (!mins || mins < 15 || mins > 180) {
-        if (msg) {
-          msg.textContent = "Session length must be between 15 and 180 minutes.";
-          msg.className = "feedback feedback-error";
-        }
-        return null;
-      }
-      const prev = daySettingsMap.get(activeDay);
-      if (prev === mins) return mins;
-      try {
-        await api("/counselor/rendering-day-settings", {
-          method: "PUT",
-          body: JSON.stringify({ day_of_week: activeDay, session_duration_minutes: mins })
-        });
-        daySettingsMap.set(activeDay, mins);
-        if (msg && !silent) {
-          msg.textContent = "";
-          msg.className = "feedback";
-        }
-        return mins;
-      } catch (err) {
-        if (msg) {
-          msg.textContent = err.message;
-          msg.className = "feedback feedback-error";
-        }
-        return null;
-      }
-    };
-
-    const ensureSessionForActiveDay = async () => {
-      if (daySettingsMap.has(activeDay)) return daySettingsMap.get(activeDay);
-      return persistSessionLength({ silent: true });
-    };
-
-    const scheduleSessionSave = () => {
-      clearTimeout(sessionSaveTimer);
-      sessionSaveTimer = setTimeout(() => persistSessionLength(), 400);
-    };
-
-    document.getElementById("renderingSessionDuration")?.addEventListener("change", scheduleSessionSave);
-    document.getElementById("renderingCustomSessionMinutes")?.addEventListener("change", scheduleSessionSave);
-    document.getElementById("renderingCustomSessionMinutes")?.addEventListener("input", scheduleSessionSave);
-
-    document.getElementById("weekdayChips")?.addEventListener("click", async (e) => {
-      const chip = e.target.closest("[data-day]");
-      if (!chip) return;
-      activeDay = Number(chip.dataset.day);
-      state.counselorActiveWeekday = activeDay;
-      document.getElementById("availabilityPanel").innerHTML = renderAvailabilityPanel();
-      bindAvailabilityPanel();
-      await ensureSessionForActiveDay();
-      document.getElementById("renderingStart")?.focus();
-    });
-
-    ensureSessionForActiveDay();
-
-    document.getElementById("renderingSlotForm")?.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const startTime = document.getElementById("renderingStart")?.value;
-      const msg = document.getElementById("renderingMsg");
-      let sessionMinutes = daySettingsMap.get(activeDay) || (await ensureSessionForActiveDay());
-      if (!sessionMinutes) sessionMinutes = readUiSessionMinutes();
-      if (!sessionMinutes) {
-        msg.textContent = "Set a valid session length first.";
-        msg.className = "feedback feedback-error";
-        return;
-      }
-      if (!startTime) {
-        msg.textContent = "Enter a start time.";
-        msg.className = "feedback feedback-error";
-        return;
-      }
-      const endTime = addMinutesToTime(startTime, sessionMinutes);
-      const conflict = renderingSlotConflict(renderingSchedule, activeDay, startTime, endTime);
-      if (conflict) {
-        msg.textContent = conflict;
-        msg.className = "feedback feedback-error";
-        return;
-      }
-      const submitBtn = e.target.querySelector('button[type="submit"]');
-      if (submitBtn) submitBtn.disabled = true;
-      try {
-        await api("/counselor/rendering-schedule", {
-          method: "POST",
-          body: JSON.stringify({
-            day_of_week: activeDay,
-            start_time: startTime,
-            end_time: endTime
-          })
-        });
-        msg.textContent = "Time slot added.";
-        msg.className = "feedback status-success";
-        state.counselorActiveWeekday = activeDay;
-        await renderCounselorCalendar(root);
-      } catch (err) {
-        msg.textContent = err.message;
-        msg.className = "feedback feedback-error";
-      } finally {
-        if (submitBtn) submitBtn.disabled = false;
-      }
-    });
-
-    document.querySelectorAll(".remove-rendering").forEach((btn) => {
-      btn.onclick = async () => {
-        await api(`/counselor/rendering-schedule/${btn.dataset.id}`, { method: "DELETE" });
-        state.counselorActiveWeekday = activeDay;
-        await renderCounselorCalendar(root);
-      };
-    });
+  const readSessionMinutes = () => {
+    const sel = document.getElementById("availSessionDuration");
+    if (!sel) return 60;
+    if (sel.value === "custom") return Number(document.getElementById("availCustomSessionMinutes")?.value) || 0;
+    return Number(sel.value);
   };
 
-  bindAvailabilityPanel();
+  const readSlotInterval = () => Number(document.getElementById("availSlotInterval")?.value) || 0;
+
+  const updatePreview = () => {
+    const dayStart = document.getElementById("availDayStart")?.value;
+    const dayEnd = document.getElementById("availDayEnd")?.value;
+    const sessionMinutes = readSessionMinutes();
+    const slotInterval = readSlotInterval();
+    const applyLunch = document.getElementById("availApplyLunch")?.checked ?? true;
+    const preview = document.getElementById("availSlotPreview");
+    const meta = document.getElementById("availPreviewMeta");
+    const msg = document.getElementById("availGenerateMsg");
+    if (!preview) return;
+
+    const dates = getSelectedAvailDates();
+    const validationError = validateAvailabilityForm({
+      dates,
+      dayStart,
+      dayEnd,
+      sessionMinutes,
+      slotInterval
+    });
+
+    if (validationError && (dayStart || dayEnd)) {
+      preview.innerHTML = `<span class="muted">${escapeHtml(validationError)}</span>`;
+      if (meta) meta.textContent = "Fix errors to preview slots";
+      return;
+    }
+
+    const slots = generateConsecutiveSlotsPreview(
+      dayStart,
+      dayEnd,
+      sessionMinutes,
+      applyLunch,
+      lunchBreaks,
+      slotInterval
+    );
+    const dateLabel = dates.length > 1 ? `${dates.length} dates` : dates[0] || "selected date";
+    if (meta) meta.textContent = `${slots.length} slot(s) per date for ${dateLabel}`;
+    preview.innerHTML = slots.length
+      ? slots.map((s) => `<span class="slot-chip">${formatSlotRange(s.start, s.end)}</span>`).join("")
+      : "<span class='muted'>No slots fit in this range.</span>";
+  };
+
+  window.__counselorUpdatePreview = updatePreview;
+  renderSelectedDateChips();
+  selectCounselorCalendarDay(primaryDate, calendarCtx);
+  syncCounselorCalendarSelection(calendarCtx);
+  updatePreview();
+
+  const sessionSel = document.getElementById("availSessionDuration");
+  const customWrap = document.getElementById("availCustomSessionWrap");
+  if (sessionSel && customWrap) {
+    const toggleCustom = () => customWrap.classList.toggle("hidden", sessionSel.value !== "custom");
+    sessionSel.onchange = () => {
+      toggleCustom();
+      updatePreview();
+    };
+    toggleCustom();
+  }
+
+  ["availDayStart", "availDayEnd", "availCustomSessionMinutes", "availApplyLunch", "availSlotInterval"].forEach((id) => {
+    document.getElementById(id)?.addEventListener("input", updatePreview);
+    document.getElementById(id)?.addEventListener("change", updatePreview);
+  });
+
+  document.getElementById("availDate")?.addEventListener("change", (e) => {
+    const d = e.target.value;
+    if (!d) return;
+    if (!Array.isArray(state.counselorAvailDates) || !state.counselorAvailDates.includes(d)) toggleCounselorAvailDate(d);
+    selectCounselorCalendarDay(d, state.counselorCalendarCtx || calendarCtx);
+    renderSelectedDateChips();
+    syncCounselorCalendarSelection(state.counselorCalendarCtx || calendarCtx);
+  });
+
+  bindCounselorCalendarDayClicks(state.counselorCalendarCtx || calendarCtx);
+
+  async function refreshAfterScheduleChange() {
+    const y = state.calendarYear || new Date().getFullYear();
+    const [cal, sched] = await Promise.all([
+      api(`/counselor/calendar?year=${y}`),
+      api("/counselor/availability-schedule")
+    ]);
+    state.counselorCalendarCtx = buildCounselorCalendarCtx(sched, cal);
+    const grid = document.querySelector(".counselor-availability-calendar");
+    if (grid) {
+      grid.innerHTML = buildYearCalendar(y, cal.appointments || [], cal.unavailable || [], {
+        scheduleByDate: state.counselorCalendarCtx.scheduleByDate,
+        activeDate: getActiveAvailDate(),
+        selectedDates: state.counselorAvailDates || []
+      });
+      bindCounselorCalendarDayClicks(state.counselorCalendarCtx);
+    }
+    syncCounselorCalendarSelection(state.counselorCalendarCtx);
+    renderSelectedDateChips();
+    selectCounselorCalendarDay(getActiveAvailDate(), state.counselorCalendarCtx);
+  }
+
+  document.getElementById("clearAvailDateBtn")?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById("availGenerateMsg");
+    const dates = getSelectedAvailDates();
+    if (!dates.length) {
+      msg.textContent = "Select at least one date on the calendar to clear.";
+      msg.className = "feedback feedback-error";
+      return;
+    }
+    const label = dates.length === 1 ? dates[0] : `${dates.length} dates`;
+    if (!window.confirm(`Clear all availability slots for ${label}?`)) return;
+    const btn = document.getElementById("clearAvailDateBtn");
+    if (btn) btn.disabled = true;
+    try {
+      for (const date of dates) {
+        await apiClearAvailabilityDate(date);
+      }
+      state.counselorAvailDates = [];
+      msg.textContent = `Cleared availability for ${label}.`;
+      msg.className = "feedback status-success";
+      await refreshAfterScheduleChange();
+    } catch (err) {
+      msg.textContent = err.message || "Could not clear availability.";
+      msg.className = "feedback feedback-error";
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+
+  document.getElementById("generateSlotsBtn")?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById("availGenerateMsg");
+    const dayStart = document.getElementById("availDayStart")?.value;
+    const dayEnd = document.getElementById("availDayEnd")?.value;
+    const sessionMinutes = readSessionMinutes();
+    const slotInterval = readSlotInterval();
+    const applyLunchBreak = document.getElementById("availApplyLunch")?.checked ?? true;
+    const dates = getSelectedAvailDates();
+    const date = dates[0] || "";
+
+    const validationError = validateAvailabilityForm({
+      dates,
+      dayStart,
+      dayEnd,
+      sessionMinutes,
+      slotInterval
+    });
+    if (validationError) {
+      msg.textContent = validationError;
+      msg.className = "feedback feedback-error";
+      updatePreview();
+      return;
+    }
+
+    const previewSlots = generateConsecutiveSlotsPreview(
+      dayStart,
+      dayEnd,
+      sessionMinutes,
+      applyLunchBreak,
+      lunchBreaks,
+      slotInterval
+    );
+    if (!previewSlots.length) {
+      msg.textContent = "No slots fit in this range. Adjust times, session length, or interval.";
+      msg.className = "feedback feedback-error";
+      return;
+    }
+
+    const btn = document.getElementById("generateSlotsBtn");
+    if (btn) btn.disabled = true;
+    try {
+      const payload = {
+        available_date: dates[0],
+        available_dates: dates,
+        session_duration_minutes: sessionMinutes,
+        day_start: dayStart,
+        day_end: dayEnd,
+        apply_lunch_break: applyLunchBreak,
+        slot_interval_minutes: slotInterval
+      };
+      const result = await apiGenerateAvailabilitySlots(payload);
+      const count = result.slotsCreated ?? previewSlots.length * dates.length;
+      const nDates = result.datesProcessed ?? dates.length;
+      msg.textContent = `Generated ${count} slot(s) across ${nDates} date(s).`;
+      msg.className = "feedback status-success";
+      await refreshAfterScheduleChange();
+    } catch (err) {
+      msg.textContent = err.message || "Could not generate slots.";
+      msg.className = "feedback feedback-error";
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+
+  document.getElementById("dateAvailabilityForm")?.addEventListener("submit", (e) => e.preventDefault());
 
   document.getElementById("availabilityForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1257,68 +1730,6 @@ async function renderCounselorCalendar(root) {
   document.getElementById("nextYearBtn").onclick = async () => {
     state.calendarYear = year + 1;
     await renderCounselorCalendar(root);
-  };
-
-  const appointmentByDate = {};
-  (calendar.appointments || []).forEach((a) => {
-    const key = String(a.appointment_date).slice(0, 10);
-    if (!appointmentByDate[key]) appointmentByDate[key] = [];
-    appointmentByDate[key].push(a);
-  });
-  const unavailableByDate = {};
-  (calendar.unavailable || []).forEach((u) => {
-    const key = String(u.unavailable_date).slice(0, 10);
-    if (!unavailableByDate[key]) unavailableByDate[key] = [];
-    unavailableByDate[key].push(u);
-  });
-  const weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-  const modal = document.getElementById("calendarDayModal");
-  const modalBody = document.getElementById("dayModalBody");
-  const modalTitle = document.getElementById("dayModalTitle");
-  document.querySelectorAll(".calendar-day-btn").forEach((btn) => {
-    btn.onclick = () => {
-      const date = btn.dataset.date;
-      const dayAppointments = appointmentByDate[date] || [];
-      const blocks = unavailableByDate[date] || [];
-      const fullBlock = blocks.find((b) => !b.start_time && !b.end_time);
-      const dow = new Date(`${date}T12:00:00`).getDay();
-      const weeklySlots = dow >= 1 && dow <= 6 ? renderingSchedule.filter((s) => s.dayOfWeek === dow) : [];
-      const sessionMins = dow >= 1 && dow <= 6 ? daySettingsMap.get(dow) : null;
-      modalTitle.textContent = `Schedule for ${date}`;
-      modalBody.innerHTML = `
-        <div class="info-card">
-          <h4>Availability</h4>
-          <p>${
-            fullBlock
-              ? `Blocked${fullBlock.message ? ` — ${escapeHtml(fullBlock.message)}` : ""}`
-              : weeklySlots.length
-                ? `${weekdayNames[dow]}: ${weeklySlots.length} slot(s)${sessionMins ? `, ${sessionMins} min sessions` : ""}`
-                : "No weekly time slots for this weekday"
-          }</p>
-        </div>
-        <div class="info-card">
-          <h4>Appointments (${dayAppointments.length})</h4>
-          ${dayAppointments.length
-            ? `<ul>${dayAppointments
-                .map((a) => `<li>${String(a.appointment_time).slice(0, 5)} - ${a.service_type} (${a.status})</li>`)
-                .join("")}</ul>`
-            : "<p>No appointments for this day.</p>"}
-        </div>
-      `;
-      modal.classList.remove("hidden");
-      modal.style.display = "flex";
-    };
-  });
-  document.getElementById("closeDayModal").onclick = () => {
-    modal.classList.add("hidden");
-    modal.style.display = "none";
-  };
-  modal.onclick = (e) => {
-    if (e.target === modal) {
-      modal.classList.add("hidden");
-      modal.style.display = "none";
-    }
   };
 }
 

@@ -5,8 +5,12 @@ const { getCounselorSessionAnalytics } = require("../services/counselorAnalytics
 const {
   getFullSchedule,
   getAvailableDateRow,
-  slotDurationMatchesSession
+  slotDurationMatchesSession,
+  generateSlotsForCounselor,
+  clearAvailabilityForDate,
+  toIsoDateKey
 } = require("../services/availabilitySchedule");
+const { resolveCounselorProfile, deriveBreaksFromWindows } = require("../config/counselorBooking");
 const {
   getDaySettings,
   getSessionMinutesForDay,
@@ -296,7 +300,41 @@ router.get("/availability-schedule/:counselorId", requireRole("student", "admin"
   res.json(schedule);
 });
 
+router.post("/available-dates/generate-slots", requireRole("counselor"), async (req, res) => {
+  const db = getPool();
+  const [users] = await db.query("SELECT full_name, email FROM users WHERE id = ?", [req.user.id]);
+  const u = users[0];
+  if (!u) return res.status(401).json({ message: "User not found." });
+
+  const result = await generateSlotsForCounselor(db, req.user.id, u.full_name, u.email, req.body);
+  if (!result.ok) return res.status(result.status || 400).json({ message: result.message });
+  res.status(201).json(result);
+});
+
+router.get("/booking-profile", requireRole("counselor"), async (req, res) => {
+  const db = getPool();
+  const [users] = await db.query("SELECT full_name, email FROM users WHERE id = ?", [req.user.id]);
+  const u = users[0];
+  if (!u) return res.status(401).json({ message: "User not found." });
+  const profile = resolveCounselorProfile(u.full_name, u.email);
+  res.json({
+    windows: profile.windows,
+    sessionMinutes: profile.sessionMinutes,
+    lunchBreaks: deriveBreaksFromWindows(profile.windows)
+  });
+});
+
 router.post("/available-dates", requireRole("counselor"), async (req, res) => {
+  if (req.body.day_start && req.body.day_end) {
+    const db = getPool();
+    const [users] = await db.query("SELECT full_name, email FROM users WHERE id = ?", [req.user.id]);
+    const u = users[0];
+    if (!u) return res.status(401).json({ message: "User not found." });
+    const result = await generateSlotsForCounselor(db, req.user.id, u.full_name, u.email, req.body);
+    if (!result.ok) return res.status(result.status || 400).json({ message: result.message });
+    return res.status(201).json(result);
+  }
+
   const availableDate = req.body.available_date ? String(req.body.available_date).slice(0, 10) : "";
   const sessionMinutes = Number(req.body.session_duration_minutes) || 60;
 
@@ -349,6 +387,16 @@ router.patch("/available-dates/:id", requireRole("counselor"), async (req, res) 
   res.json({ ok: true, sessionDurationMinutes: sessionMinutes });
 });
 
+router.delete("/available-dates/by-date/:date", requireRole("counselor"), async (req, res) => {
+  const dateKey = String(req.params.date).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    return res.status(400).json({ message: "Invalid date format. Use YYYY-MM-DD." });
+  }
+  const db = getPool();
+  await clearAvailabilityForDate(db, req.user.id, dateKey);
+  res.json({ ok: true, availableDate: dateKey });
+});
+
 router.delete("/available-dates/:id", requireRole("counselor"), async (req, res) => {
   const id = Number(req.params.id);
   const db = getPool();
@@ -359,7 +407,7 @@ router.delete("/available-dates/:id", requireRole("counselor"), async (req, res)
   if (!rows[0]) return res.status(404).json({ message: "Available date not found." });
   if (rows[0].counselor_id !== req.user.id) return res.status(403).json({ message: "Not authorized" });
 
-  const dateKey = String(rows[0].available_date).slice(0, 10);
+  const dateKey = toIsoDateKey(rows[0].available_date);
   await db.query("DELETE FROM counselor_date_slots WHERE counselor_id = ? AND available_date = ?", [
     req.user.id,
     dateKey

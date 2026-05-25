@@ -3,6 +3,7 @@ const { getPool } = require("../config/db");
 const { requireAuth } = require("../middleware/auth");
 const { resolveCounselorProfile, resolveSlotsForDate, isOfficeBookableDay, isSaturday } = require("../config/counselorBooking");
 const { getRenderingSlotsForDate } = require("../services/renderingSchedule");
+const { getDateSlotsForDate } = require("../services/availabilitySchedule");
 
 const router = express.Router();
 
@@ -50,10 +51,11 @@ router.get("/booking-options", requireAuth, async (req, res) => {
   }
   let slots = [];
   if (dateRaw && isOfficeBookableDay(dateRaw)) {
+    const dateSlotRows = await getDateSlotsForDate(db, counselorId, dateRaw);
     const renderingRows = await getRenderingSlotsForDate(db, counselorId, dateRaw);
-    slots = resolveSlotsForDate(profile, dateRaw, renderingRows);
-    if (!slots.length && renderingRows.length === 0) {
-      dayNote = dayNote || "No time slots are set for this day of the week.";
+    slots = resolveSlotsForDate(profile, dateRaw, renderingRows, dateSlotRows);
+    if (!slots.length && dateSlotRows.length === 0 && renderingRows.length === 0) {
+      dayNote = dayNote || "No time slots are set for this date.";
     }
   }
 
