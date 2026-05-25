@@ -18,7 +18,8 @@ router.get("/counselors", async (req, res) => {
   if (date) {
     query += `
       AND id NOT IN (
-        SELECT counselor_id FROM counselor_unavailabilities WHERE unavailable_date = ?
+        SELECT counselor_id FROM counselor_unavailabilities
+        WHERE unavailable_date = ? AND start_time IS NULL AND end_time IS NULL
       )
     `;
     params.push(date);
@@ -28,7 +29,6 @@ router.get("/counselors", async (req, res) => {
   res.json(rows);
 });
 
-/** Authenticated: counselor-specific services and time slots for a given date. */
 router.get("/booking-options", requireAuth, async (req, res) => {
   const counselorId = Number(req.query.counselorId);
   const dateRaw = req.query.date ? String(req.query.date).slice(0, 10) : "";
@@ -48,11 +48,14 @@ router.get("/booking-options", requireAuth, async (req, res) => {
     if (isSaturday(dateRaw)) dayNote = "Bookings are not available on Saturdays.";
     else if (!isOfficeBookableDay(dateRaw)) dayNote = "Bookings are only available Monday through Friday.";
   }
-  let renderingRows = [];
+  let slots = [];
   if (dateRaw && isOfficeBookableDay(dateRaw)) {
-    renderingRows = await getRenderingSlotsForDate(db, counselorId, dateRaw);
+    const renderingRows = await getRenderingSlotsForDate(db, counselorId, dateRaw);
+    slots = resolveSlotsForDate(profile, dateRaw, renderingRows);
+    if (!slots.length && renderingRows.length === 0) {
+      dayNote = dayNote || "No time slots are set for this day of the week.";
+    }
   }
-  const slots = dateRaw && isOfficeBookableDay(dateRaw) ? resolveSlotsForDate(profile, dateRaw, renderingRows) : [];
 
   res.json({
     counselorId,
