@@ -199,8 +199,78 @@ function buildSlotsFromRenderingRows(rows) {
   return slots;
 }
 
-function resolveSlotsForDate(profile, isoDate, renderingRows) {
+/** Gaps between profile windows (e.g. 12:00–13:00 lunch). Falls back to noon break. */
+function deriveBreaksFromWindows(windows) {
+  if (!windows || windows.length < 2) {
+    return [{ start: "12:00", end: "13:00" }];
+  }
+  const sorted = [...windows].sort((a, b) => hhmmToMinutes(a.start) - hhmmToMinutes(b.start));
+  const breaks = [];
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const gapStart = sorted[i].end;
+    const gapEnd = sorted[i + 1].start;
+    if (hhmmToMinutes(gapEnd) > hhmmToMinutes(gapStart)) {
+      breaks.push({ start: gapStart, end: gapEnd });
+    }
+  }
+  return breaks.length ? breaks : [{ start: "12:00", end: "13:00" }];
+}
+
+function getBookableSegments(rangeStart, rangeEnd, breaks) {
+  const rs = hhmmToMinutes(rangeStart);
+  const re = hhmmToMinutes(rangeEnd);
+  let segments = [{ start: rs, end: re }];
+  for (const br of breaks || []) {
+    const b0 = hhmmToMinutes(br.start);
+    const b1 = hhmmToMinutes(br.end);
+    const next = [];
+    for (const seg of segments) {
+      if (b1 <= seg.start || b0 >= seg.end) {
+        next.push(seg);
+        continue;
+      }
+      if (b0 > seg.start) next.push({ start: seg.start, end: Math.min(b0, seg.end) });
+      if (b1 < seg.end) next.push({ start: Math.max(b1, seg.start), end: seg.end });
+    }
+    segments = next.filter((s) => s.end > s.start);
+  }
+  return segments.map((s) => ({
+    start: minutesToHHMM(s.start),
+    end: minutesToHHMM(s.end)
+  }));
+}
+
+/**
+ * Build session slots within a day range, skipping lunch/break windows.
+ * @param {number} slotIntervalMinutes gap between consecutive slot start times (after each session ends)
+ */
+function generateConsecutiveSlots(rangeStart, rangeEnd, sessionMinutes, breaks = [], slotIntervalMinutes = 0) {
+  if (!rangeStart || !rangeEnd || sessionMinutes < 1) return [];
+  if (hhmmToMinutes(rangeEnd) <= hhmmToMinutes(rangeStart)) return [];
+
+  const gap = Math.max(0, Number(slotIntervalMinutes) || 0);
+  const step = sessionMinutes + gap;
+  const segments = getBookableSegments(rangeStart, rangeEnd, breaks);
+  const slots = [];
+  for (const seg of segments) {
+    let t = hhmmToMinutes(seg.start);
+    const segEnd = hhmmToMinutes(seg.end);
+    while (t + sessionMinutes <= segEnd) {
+      slots.push({
+        start: minutesToHHMM(t),
+        end: minutesToHHMM(t + sessionMinutes)
+      });
+      t += step;
+    }
+  }
+  return slots;
+}
+
+function resolveSlotsForDate(profile, isoDate, renderingRows, dateSlotRows) {
   if (!isoDate || !isOfficeBookableDay(isoDate)) return [];
+  if (dateSlotRows && dateSlotRows.length > 0) {
+    return buildSlotsFromRenderingRows(dateSlotRows);
+  }
   if (renderingRows && renderingRows.length > 0) {
     return buildSlotsFromRenderingRows(renderingRows);
   }
@@ -222,7 +292,12 @@ const START_GAP_BUFFER_MIN = 30;
  * Validate a student booking against counselor profile and calendar rules.
  * @param {{ fullName: string, email: string }} counselor
  */
-function validateStudentBooking(counselor, { date, timeHHMM, serviceType }, renderingRows = null) {
+function validateStudentBooking(
+  counselor,
+  { date, timeHHMM, serviceType },
+  renderingRows = null,
+  dateSlotRows = null
+) {
   const profile = resolveCounselorProfile(counselor.fullName, counselor.email);
   if (!date) return { ok: false, message: "Appointment date is required." };
   if (isSaturday(date)) return { ok: false, message: "Bookings are not available on Saturdays." };
@@ -232,7 +307,7 @@ function validateStudentBooking(counselor, { date, timeHHMM, serviceType }, rend
     return { ok: false, message: "This service is not available for the selected counselor." };
   }
 
-  const slots = resolveSlotsForDate(profile, date, renderingRows);
+  const slots = resolveSlotsForDate(profile, date, renderingRows, dateSlotRows);
   const canonical = String(timeHHMM).slice(0, 5);
   const slot = slots.find((s) => s.value === canonical);
   if (!slot) {
@@ -271,6 +346,8 @@ module.exports = {
   resolveCounselorProfile,
   buildSlotsForDate,
   buildSlotsFromRenderingRows,
+  deriveBreaksFromWindows,
+  generateConsecutiveSlots,
   resolveSlotsForDate,
   validateStudentBooking,
   sessionEndHHMMSS,
@@ -280,5 +357,6 @@ module.exports = {
   appointmentsConflict,
   blocksInterval,
   hhmmToMinutes,
+  minutesToHHMM,
   START_GAP_BUFFER_MIN
 };
