@@ -9,6 +9,7 @@ const {
   blocksInterval
 } = require("../config/counselorBooking");
 const { getRenderingSlotsForDate } = require("../services/renderingSchedule");
+const { getDateSlotsForDate } = require("../services/availabilitySchedule");
 
 const router = express.Router();
 
@@ -78,11 +79,13 @@ router.post("/", requireRole("student"), async (req, res) => {
     return res.status(400).json({ message: "Invalid or inactive counselor." });
   }
 
+  const dateSlotRows = await getDateSlotsForDate(db, counselorId, date);
   const renderingRows = await getRenderingSlotsForDate(db, counselorId, date);
   const bookingCheck = validateStudentBooking(
     { fullName: counselorRow.fullName, email: counselorRow.email },
     { date, timeHHMM, serviceType },
-    renderingRows
+    renderingRows,
+    dateSlotRows
   );
   if (!bookingCheck.ok) {
     return res.status(400).json({ message: bookingCheck.message });
