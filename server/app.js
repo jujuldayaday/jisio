@@ -206,11 +206,18 @@ function logLabAccessHints(port) {
   } else {
     console.log(`  → http://<your-pc-ipv4>:${port}   (run ipconfig to find IPv4)`);
   }
-  console.log(`[lab] Google login: set APP_BASE_URL to the same URL students use (currently: ${appBase})`);
-  console.log(
-    "[lab] In Google Cloud Console, add that URL under Authorized JavaScript origins and redirect URI:\n" +
-      `       ${appBase}/auth/google/callback\n`
-  );
+  const isLocalhostBase = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(appBase);
+  const isPrivateLanBase = /^https?:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(appBase);
+  if (isPrivateLanBase) {
+    console.warn(
+      "[lab] Google OAuth cannot use a 192.168.x.x URL in Google Cloud Console.\n" +
+        "       • Lab PCs: open http://<your-ipv4>:3000 and sign in with email + password, OR\n" +
+        "       • Use a tunnel (ngrok / Cloudflare) for Google login on all PCs — see .env.example"
+    );
+  } else if (!isLocalhostBase) {
+    console.log(`[lab] Google login APP_BASE_URL: ${appBase}`);
+    console.log(`[lab] Google redirect URI: ${appBase}/auth/google/callback`);
+  }
 }
 
 async function startServerWithRetry() {
