@@ -4461,3 +4461,82 @@ body.dark-mode .sidebar .menu-btn.active:focus-visible {
     0 10px 26px rgba(0, 0, 0, 0.38),
     inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
+
+/* Role dashboard home (student, counselor, admin) */
+.dash-home { display: flex; flex-direction: column; gap: var(--section-gap); }
+.dash-panel-header { align-items: flex-end; flex-wrap: wrap; gap: 0.75rem; }
+.dash-as-of { margin: 0; white-space: nowrap; }
+.dash-stat-grid { display: grid; gap: 1rem; margin-bottom: 0.25rem; }
+.dash-stat-grid--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.dash-stat-grid--5, .admin-overview-stats.dash-stat-grid--5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.dash-stat-card { padding: 1rem 1.1rem; border-radius: var(--radius); border: 1px solid rgba(58, 82, 163, 0.18); background: linear-gradient(180deg, #ffffff 0%, var(--slate-50) 100%); box-shadow: var(--elev-1); }
+.dash-stat-card--blue { border-color: rgba(58, 82, 163, 0.28); }
+.dash-stat-card--gold { border-color: rgba(185, 148, 48, 0.35); background: linear-gradient(180deg, #fffef8 0%, #faf6eb 100%); }
+.dash-stat-label { margin: 0; font-size: 0.88rem; font-weight: 600; color: var(--blue-950); }
+.dash-stat-value { margin: 0.3rem 0 0; font-size: 1.85rem; font-weight: 800; letter-spacing: -0.02em; color: var(--xu-blue-1); line-height: 1.1; }
+.dash-stat-card--gold .dash-stat-value { color: var(--gold-500); }
+.dash-stat-sub { margin: 0.35rem 0 0; }
+.dash-layout-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.dash-panel { padding: 1rem 1.1rem; border-radius: var(--radius); border: 1px solid rgba(58, 82, 163, 0.16); background: #fff; box-shadow: var(--elev-1); }
+.dash-panel--wide { grid-column: 1 / -1; }
+.dash-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.85rem; }
+.dash-panel-head .subsection-title { margin: 0; }
+.dash-highlight-card { padding: 0.85rem 1rem; border-radius: var(--radius-md); background: linear-gradient(135deg, rgba(58, 82, 163, 0.08), rgba(185, 148, 48, 0.06)); border: 1px solid rgba(58, 82, 163, 0.14); }
+.dash-highlight-title { margin: 0 0 0.25rem; font-size: 1.1rem; font-weight: 700; color: var(--blue-950); }
+.dash-highlight-meta { margin: 0.5rem 0 0.35rem; }
+.dash-highlight-code { margin: 0 0 0.5rem; }
+.dash-appt-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.65rem; }
+.dash-appt-item { padding: 0.65rem 0.75rem; border-radius: var(--radius-sm); background: var(--slate-50); border: 1px solid rgba(58, 82, 163, 0.1); }
+.dash-appt-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.75rem; }
+.dash-appt-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.35rem; margin-top: 0.35rem; }
+.dash-status-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; text-transform: capitalize; }
+.dash-status-badge.status-pending { background: #fef3c7; color: var(--warning); }
+.dash-status-badge.status-accepted { background: #dbeafe; color: var(--xu-blue-2); }
+.dash-status-badge.status-declined, .dash-status-badge.status-cancelled { background: var(--danger-soft); color: var(--danger); }
+.dash-status-badge.status-reschedule_requested { background: #ede9fe; color: #5b21b6; }
+.dash-activity-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.dash-activity-item { padding: 0.65rem 0.75rem; border-radius: var(--radius-sm); border: 1px solid rgba(58, 82, 163, 0.1); background: var(--slate-25); }
+.dash-activity-item.unread { border-color: rgba(185, 148, 48, 0.45); background: #fffef8; }
+.dash-activity-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; }
+.dash-activity-head strong { font-size: 0.92rem; }
+.dash-status-bars { display: flex; flex-direction: column; gap: 0.65rem; }
+.dash-status-row-label { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.25rem; }
+.dash-status-track { height: 8px; border-radius: 999px; background: var(--slate-100); overflow: hidden; }
+.dash-status-fill { display: block; height: 100%; border-radius: 999px; min-width: 2px; transition: width 0.35s var(--ease-out-soft); }
+.dash-outcome-strip { display: flex; flex-wrap: wrap; gap: 0.65rem; }
+.dash-outcome-pill { padding: 0.45rem 0.85rem; border-radius: 999px; font-size: 0.82rem; font-weight: 600; background: var(--slate-50); border: 1px solid rgba(58, 82, 163, 0.12); }
+.dash-outcome-pill strong { margin-left: 0.35rem; font-size: 1rem; }
+.dash-outcome-pill.done { background: #dcfce7; color: var(--success); }
+.dash-outcome-pill.referred { background: #dbeafe; color: var(--xu-blue-2); }
+.dash-outcome-pill.no-show { background: var(--danger-soft); color: var(--danger); }
+.dash-quick-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.85rem; }
+.dash-quick-card { text-align: left; padding: 0.9rem 1rem; border-radius: var(--radius-md); border: 1px solid rgba(58, 82, 163, 0.16); background: #fff; box-shadow: var(--elev-1); cursor: pointer; transition: transform 0.2s var(--ease-out-soft), box-shadow 0.2s var(--ease-out-soft); }
+.dash-quick-card:hover { transform: translateY(-2px); box-shadow: var(--elev-2); border-color: rgba(185, 148, 48, 0.4); }
+.dash-quick-card strong { display: block; margin-bottom: 0.25rem; color: var(--blue-950); }
+.dash-quick-module-grid .dash-quick-card { width: 100%; }
+.dash-snapshot-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.dash-snapshot-list li { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px dashed rgba(58, 82, 163, 0.12); }
+.dash-snapshot-list li:last-child { border-bottom: none; }
+.chart-canvas-wrap--compact { height: 200px; min-height: 180px; }
+.btn-sm { padding: 0.35rem 0.7rem; font-size: 0.82rem; }
+@media (max-width: 1100px) {
+  .dash-stat-grid--4, .dash-stat-grid--5, .admin-overview-stats.dash-stat-grid--5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .dash-stat-grid--4, .dash-stat-grid--5, .admin-overview-stats.dash-stat-grid--5, .dash-layout-grid, .dash-quick-grid { grid-template-columns: 1fr; }
+}
+body.dark-mode .dash-stat-card, body.dark-mode .dash-panel, body.dark-mode .dash-quick-card, body.dark-mode .dash-appt-item, body.dark-mode .dash-activity-item { background: rgba(22, 32, 58, 0.92); border-color: rgba(148, 163, 184, 0.2); }
+body.dark-mode .dash-stat-card--gold { background: rgba(40, 36, 22, 0.85); }
+body.dark-mode .dash-stat-label, body.dark-mode .dash-highlight-title, body.dark-mode .dash-quick-card strong, body.dark-mode .dash-appt-main strong { color: var(--gold-300); }
+body.dark-mode .dash-stat-value { color: #e8eef9; }
+body.dark-mode .dash-stat-card--gold .dash-stat-value { color: var(--gold-400); }
+body.dark-mode .dash-highlight-card { background: rgba(58, 82, 163, 0.15); border-color: rgba(148, 163, 184, 0.2); }
+body.dark-mode .dash-activity-item.unread { background: rgba(185, 148, 48, 0.12); border-color: rgba(185, 148, 48, 0.35); }
+body.dark-mode .dash-status-track { background: rgba(148, 163, 184, 0.2); }
+body.dark-mode .dash-outcome-pill { background: rgba(30, 41, 70, 0.9); border-color: rgba(148, 163, 184, 0.2); }
+body.dark-mode .dash-status-badge.status-pending { background: rgba(161, 98, 7, 0.25); color: #fcd34d; }
+body.dark-mode .dash-status-badge.status-accepted { background: rgba(58, 82, 163, 0.35); color: #bfdbfe; }
+#viewRoot.view-anim-in .dash-stat-grid > *, #viewRoot.view-anim-in .dash-layout-grid > *, #viewRoot.view-anim-in .dash-quick-grid > * { animation: viewFadeUp 0.45s var(--ease-out-soft) both; }
+#viewRoot.view-anim-in .dash-stat-grid > *:nth-child(2), #viewRoot.view-anim-in .dash-layout-grid > *:nth-child(2) { animation-delay: 0.05s; }
+#viewRoot.view-anim-in .dash-stat-grid > *:nth-child(3), #viewRoot.view-anim-in .dash-layout-grid > *:nth-child(3) { animation-delay: 0.1s; }
+#viewRoot.view-anim-in .dash-stat-grid > *:nth-child(4) { animation-delay: 0.15s; }
