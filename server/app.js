@@ -1,9 +1,44 @@
 require("dotenv").config();
 
 const path = require("path");
+const fs = require("fs");
 /** Always resolve front-end files from the repo root (parent of /server), not process.cwd(). */
 const PROJECT_ROOT = path.join(__dirname, "..");
 console.log("Running from:", __dirname, "| Project root:", PROJECT_ROOT);
+
+function isProbablyDockerRuntime() {
+  // Linux containers have /.dockerenv; Render/Railway also set their own env vars.
+  return (
+    fs.existsSync("/.dockerenv") ||
+    Boolean(process.env.RENDER) ||
+    Boolean(process.env.RAILWAY_ENVIRONMENT) ||
+    Boolean(process.env.DOCKER_CONTAINER)
+  );
+}
+
+// If you run the Node process directly on your laptop (not via Docker),
+// docker-compose hostnames like `mysql` / `mailhog` won't resolve.
+// Keep cloud behavior unchanged, but make localhost demo work out-of-the-box.
+if (process.env.NODE_ENV !== "production" && !isProbablyDockerRuntime()) {
+  const beforeDbHost = process.env.DB_HOST;
+  const beforeSmtpHost = process.env.SMTP_HOST;
+
+  if ((process.env.DB_HOST || "").toLowerCase() === "mysql") {
+    process.env.DB_HOST = process.env.DB_HOST_LOCAL || "localhost";
+    process.env.DB_PORT = process.env.DB_PORT_LOCAL || "3307";
+  }
+  if ((process.env.SMTP_HOST || "").toLowerCase() === "mailhog") {
+    process.env.SMTP_HOST = process.env.SMTP_HOST_LOCAL || "localhost";
+    process.env.SMTP_PORT = process.env.SMTP_PORT_LOCAL || "1025";
+  }
+
+  if (beforeDbHost !== process.env.DB_HOST || beforeSmtpHost !== process.env.SMTP_HOST) {
+    console.log(
+      `[bootstrap] Local overrides: DB=${process.env.DB_HOST}:${process.env.DB_PORT} SMTP=${process.env.SMTP_HOST}:${process.env.SMTP_PORT}`
+    );
+  }
+}
+
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -155,6 +190,7 @@ async function startServerWithRetry() {
 
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
     try {
+      console.log(`[bootstrap] DB init attempt ${attempt}/${maxRetries}...`);
       await initDb();
       startReminderService();
       app.listen(PORT, () => {
