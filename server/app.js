@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 /** Always resolve front-end files from the repo root (parent of /server), not process.cwd(). */
 const PROJECT_ROOT = path.join(__dirname, "..");
 console.log("Running from:", __dirname, "| Project root:", PROJECT_ROOT);
@@ -184,6 +185,34 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ message: "Internal server error" });
 });
 
+function getLanIPv4Addresses() {
+  const ips = [];
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === "IPv4" && !net.internal) ips.push(net.address);
+    }
+  }
+  return [...new Set(ips)];
+}
+
+function logLabAccessHints(port) {
+  const lanIps = getLanIPv4Addresses();
+  const appBase = (process.env.APP_BASE_URL || `http://localhost:${port}`).replace(/\/$/, "");
+
+  console.log("\n[lab] Other devices on the same Wi‑Fi can open:");
+  if (lanIps.length) {
+    lanIps.forEach((ip) => console.log(`  → http://${ip}:${port}`));
+  } else {
+    console.log(`  → http://<your-pc-ipv4>:${port}   (run ipconfig to find IPv4)`);
+  }
+  console.log(`[lab] Google login: set APP_BASE_URL to the same URL students use (currently: ${appBase})`);
+  console.log(
+    "[lab] In Google Cloud Console, add that URL under Authorized JavaScript origins and redirect URI:\n" +
+      `       ${appBase}/auth/google/callback\n`
+  );
+}
+
 async function startServerWithRetry() {
   const maxRetries = Number(process.env.DB_CONNECT_RETRIES || 20);
   const retryDelayMs = Number(process.env.DB_CONNECT_RETRY_DELAY_MS || 3000);
@@ -193,8 +222,10 @@ async function startServerWithRetry() {
       console.log(`[bootstrap] DB init attempt ${attempt}/${maxRetries}...`);
       await initDb();
       startReminderService();
-      app.listen(PORT, () => {
+      const host = process.env.HOST || "0.0.0.0";
+      app.listen(PORT, host, () => {
         console.log(`Server running on http://localhost:${PORT}`);
+        if (host === "0.0.0.0") logLabAccessHints(PORT);
         const bits = ["XU email + password (JWT)"];
         if (isGoogleOAuthEnabled()) {
           console.log("[routes] Optional Google OAuth: /auth/google/start?role=...");
