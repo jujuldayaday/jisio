@@ -11,6 +11,7 @@ function getPool() {
       user: process.env.DB_USER || "root",
       password: process.env.DB_PASSWORD || "",
       database: process.env.DB_NAME || "gco_appointments",
+      connectTimeout: Number(process.env.DB_CONNECT_TIMEOUT_MS || 5000),
       waitForConnections: true,
       connectionLimit: 10
     });
