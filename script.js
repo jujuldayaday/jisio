@@ -10,6 +10,10 @@ let counselorChartDaily = null;
 let counselorChartMonthly = null;
 let adminChartDaily = null;
 let adminChartMonthly = null;
+let counselorDashPollTimer = null;
+let adminDashPollTimer = null;
+let counselorDashChartDaily = null;
+let adminDashChartMini = null;
 
 console.log("SCRIPT IS WORKING");
 
@@ -76,6 +80,34 @@ function destroyAdminAnalyticsCharts() {
   if (adminChartMonthly) {
     adminChartMonthly.destroy();
     adminChartMonthly = null;
+  }
+}
+
+function destroyCounselorDashCharts() {
+  if (counselorDashChartDaily) {
+    counselorDashChartDaily.destroy();
+    counselorDashChartDaily = null;
+  }
+}
+
+function destroyAdminDashCharts() {
+  if (adminDashChartMini) {
+    adminDashChartMini.destroy();
+    adminDashChartMini = null;
+  }
+}
+
+function stopCounselorDashPolling() {
+  if (counselorDashPollTimer) {
+    clearInterval(counselorDashPollTimer);
+    counselorDashPollTimer = null;
+  }
+}
+
+function stopAdminDashPolling() {
+  if (adminDashPollTimer) {
+    clearInterval(adminDashPollTimer);
+    adminDashPollTimer = null;
   }
 }
 
@@ -659,9 +691,13 @@ function renderDashboard(role) {
       clearInterval(counselorAnalyticsPollTimer);
       counselorAnalyticsPollTimer = null;
     }
+    stopCounselorDashPolling();
+    stopAdminDashPolling();
     stopCounselorCalendarPolling();
     destroyCounselorAnalyticsCharts();
+    destroyCounselorDashCharts();
     destroyAdminAnalyticsCharts();
+    destroyAdminDashCharts();
     state.currentRole = null;
     state.activeMenu = null;
     state.token = null;
@@ -1757,6 +1793,542 @@ function formatRelativeTime(iso) {
   return d.toLocaleDateString();
 }
 
+function todayIsoLocal() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function parseApptDate(str) {
+  const ymd = formatDisplayDate(str);
+  if (!ymd || ymd === "—") return null;
+  const d = new Date(`${ymd}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function startOfWeekMonday(d = new Date()) {
+  const x = new Date(d);
+  const day = x.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  x.setDate(x.getDate() + diff);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function endOfWeekSunday(d = new Date()) {
+  const start = startOfWeekMonday(d);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+  return end;
+}
+
+function isDateInRange(dateStr, start, end) {
+  const d = parseApptDate(dateStr);
+  if (!d) return false;
+  const t = d.getTime();
+  return t >= start.getTime() && t <= end.getTime();
+}
+
+function isCurrentMonth(dateStr) {
+  const d = parseApptDate(dateStr);
+  if (!d) return false;
+  const now = new Date();
+  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+}
+
+function isCounselingVisit(a) {
+  return a.status === "accepted" || Boolean(a.outcome);
+}
+
+function countStudentVisits(appointments, period) {
+  const rows = appointments || [];
+  if (period === "week") {
+    const start = startOfWeekMonday();
+    const end = endOfWeekSunday();
+    return rows.filter((a) => isCounselingVisit(a) && isDateInRange(a.appointment_date, start, end)).length;
+  }
+  return rows.filter((a) => isCounselingVisit(a) && isCurrentMonth(a.appointment_date)).length;
+}
+
+function renderDashStatusBadge(status) {
+  const s = String(status || "").toLowerCase();
+  const label = s === "reschedule_requested" ? "Reschedule" : s.charAt(0).toUpperCase() + s.slice(1);
+  return `<span class="dash-status-badge status-${s}">${escapeHtml(label)}</span>`;
+}
+
+function renderDashRecentActivity(items) {
+  const rows = (items || []).slice(0, 6);
+  if (!rows.length) return '<p class="muted tiny">No recent activity yet.</p>';
+  return `<ul class="dash-activity-list">${rows
+    .map((n) => {
+      const unread = n.is_read ? "" : " unread";
+      const badge = n.is_read ? "" : '<span class="pill-unread">New</span>';
+      return `<li class="dash-activity-item${unread}">
+        <div class="dash-activity-head">
+          <strong>${escapeHtml(n.title || "Update")}</strong>
+          <span class="muted tiny">${formatRelativeTime(n.created_at)}</span>
+        </div>
+        <p class="muted tiny">${escapeHtml(n.message || "")}</p>
+        ${badge}
+      </li>`;
+    })
+    .join("")}</ul>`;
+}
+
+function renderDashStatusBars(counts, total) {
+  const items = [
+    { key: "pending", label: "Pending", color: "var(--warning)" },
+    { key: "accepted", label: "Accepted", color: "var(--xu-blue-2)" },
+    { key: "reschedule_requested", label: "Reschedule", color: "var(--gold-500)" },
+    { key: "declined", label: "Declined", color: "var(--danger)" },
+    { key: "cancelled", label: "Cancelled", color: "var(--slate-300)" }
+  ];
+  const denom = total || 1;
+  return `<div class="dash-status-bars">${items
+    .map((it) => {
+      const n = counts[it.key] || 0;
+      const pct = Math.round((n / denom) * 100);
+      return `<div class="dash-status-row">
+        <div class="dash-status-row-label"><span>${it.label}</span><strong>${n}</strong></div>
+        <div class="dash-status-track"><span class="dash-status-fill" style="width:${pct}%;background:${it.color}"></span></div>
+      </div>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderDashStatCard(label, value, sub, variant = "blue") {
+  return `<article class="dash-stat-card dash-stat-card--${variant}">
+    <p class="dash-stat-label">${escapeHtml(label)}</p>
+    <p class="dash-stat-value">${escapeHtml(String(value))}</p>
+    ${sub ? `<p class="dash-stat-sub muted tiny">${escapeHtml(sub)}</p>` : ""}
+  </article>`;
+}
+
+function renderDashQuickLinks(role, links) {
+  return `<div class="dash-quick-grid">${links
+    .map(
+      (l) =>
+        `<button type="button" class="dash-quick-card" data-dash-nav="${escapeHtml(l.menu)}">
+          <strong>${escapeHtml(l.title)}</strong>
+          <span class="muted tiny">${escapeHtml(l.desc)}</span>
+        </button>`
+    )
+    .join("")}</div>`;
+}
+
+function attachDashQuickLinks(role, root) {
+  root.querySelectorAll("[data-dash-nav]").forEach((btn) => {
+    btn.onclick = () => navigateDashboard(role, btn.dataset.dashNav, "push");
+  });
+}
+
+function renderDashApptRows(rows, emptyText, showStudent = true) {
+  if (!rows.length) return `<p class="muted tiny">${escapeHtml(emptyText)}</p>`;
+  return `<ul class="dash-appt-list">${rows
+    .map((a) => {
+      const who = showStudent ? escapeHtml(a.student_name || "Student") : escapeHtml(a.counselor_name || "Counselor");
+      return `<li class="dash-appt-item">
+        <div class="dash-appt-main">
+          <strong>${who}</strong>
+          <span class="muted tiny">${escapeHtml(a.service_type || "Session")}</span>
+        </div>
+        <div class="dash-appt-meta">
+          <span class="muted tiny">${formatDisplayDate(a.appointment_date)} · ${formatDisplayTime(a.appointment_time)}</span>
+          ${renderDashStatusBadge(a.status)}
+        </div>
+      </li>`;
+    })
+    .join("")}</ul>`;
+}
+
+async function renderStudentDashboard(root) {
+  stopCounselorDashPolling();
+  stopAdminDashPolling();
+  destroyCounselorDashCharts();
+  destroyAdminDashCharts();
+  await Promise.all([loadAppointments(), loadNotifications()]);
+  const appts = state.appointments || [];
+  const today = todayIsoLocal();
+  const weeklyVisits = countStudentVisits(appts, "week");
+  const monthlyVisits = countStudentVisits(appts, "month");
+  const pending = appts.filter((a) => ["pending", "reschedule_requested"].includes(a.status)).length;
+  const upcoming = appts
+    .filter((a) => !a.outcome && ["pending", "accepted", "reschedule_requested"].includes(a.status) && formatDisplayDate(a.appointment_date) >= today)
+    .sort((a, b) => String(a.appointment_date).localeCompare(String(b.appointment_date)) || String(a.appointment_time).localeCompare(String(b.appointment_time)));
+  const next = upcoming[0];
+  const recentAppts = [...appts]
+    .sort((a, b) => String(b.appointment_date).localeCompare(String(a.appointment_date)) || String(b.appointment_time).localeCompare(String(a.appointment_time)))
+    .slice(0, 5);
+
+  root.innerHTML = `
+    <div class="dash-home">
+      <div class="panel-header dash-panel-header">
+        <div>
+          <h2 class="section-title">Dashboard</h2>
+          <p class="muted tiny">Welcome back, ${escapeHtml(state.user?.name || "Student")}.</p>
+        </div>
+        <p class="muted tiny dash-as-of">${new Date().toLocaleDateString("en-PH", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p>
+      </div>
+      <div class="dash-stat-grid dash-stat-grid--4">
+        ${renderDashStatCard("Visits this week", weeklyVisits, "Approved or completed sessions", "gold")}
+        ${renderDashStatCard("Visits this month", monthlyVisits, "Based on appointment date", "blue")}
+        ${renderDashStatCard("Upcoming", upcoming.length, "Scheduled sessions", "blue")}
+        ${renderDashStatCard("Pending", pending, "Awaiting counselor action", "gold")}
+      </div>
+      <div class="dash-layout-grid">
+        <section class="dash-panel">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Next appointment</h3>
+            ${next ? "" : '<button type="button" class="btn ghost btn-sm" data-dash-nav="Book Appointment">Book now</button>'}
+          </div>
+          ${
+            next
+              ? `<div class="dash-highlight-card">
+                  <p class="dash-highlight-title">${escapeHtml(next.counselor_name || "Counselor")}</p>
+                  <p class="muted">${escapeHtml(next.service_type || "Counseling")}</p>
+                  <p class="dash-highlight-meta"><strong>${formatDisplayDate(next.appointment_date)}</strong> · ${formatDisplayTime(next.appointment_time)}</p>
+                  <p class="dash-highlight-code muted tiny">Code: ${escapeHtml(next.booking_code || "—")}</p>
+                  ${renderDashStatusBadge(next.status)}
+                </div>`
+              : '<p class="muted tiny">No upcoming appointments. Book a session when you are ready.</p>'
+          }
+        </section>
+        <section class="dash-panel">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Recent appointments</h3>
+            <button type="button" class="btn ghost btn-sm" data-dash-nav="Appointment History">View all</button>
+          </div>
+          ${renderDashApptRows(recentAppts, "No appointments yet.", false)}
+        </section>
+        <section class="dash-panel dash-panel--wide">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Recent activity</h3>
+            <button type="button" class="btn ghost btn-sm" data-dash-nav="Notifications">Notifications</button>
+          </div>
+          ${renderDashRecentActivity(state.notifications)}
+        </section>
+      </div>
+      ${renderDashQuickLinks("student", [
+        { menu: "Book Appointment", title: "Book appointment", desc: "Schedule with a counselor" },
+        { menu: "GCO Services", title: "GCO services", desc: "Programs and support offered" },
+        { menu: "Appointment History", title: "History", desc: "View or cancel bookings" }
+      ])}
+    </div>`;
+  attachDashQuickLinks("student", root);
+}
+
+async function renderCounselorDashboard(root) {
+  stopCounselorDashPolling();
+  destroyCounselorDashCharts();
+  await Promise.all([loadAppointments(), loadNotifications()]);
+  let analytics = { weekly: 0, monthly: 0, chart30Days: [], outcomeBreakdown: { totals: {} } };
+  try {
+    analytics = await api("/counselor/analytics");
+  } catch (_e) {
+    /* placeholders */
+  }
+
+  const paint = () => {
+    const appts = state.appointments || [];
+    const today = todayIsoLocal();
+    const todayAppts = appts.filter(
+      (a) => formatDisplayDate(a.appointment_date) === today && ["pending", "accepted", "reschedule_requested"].includes(a.status)
+    );
+    const pending = appts.filter((a) => ["pending", "reschedule_requested"].includes(a.status));
+    const upcoming = appts
+      .filter((a) => !a.outcome && a.status === "accepted" && formatDisplayDate(a.appointment_date) >= today)
+      .sort((a, b) => String(a.appointment_date).localeCompare(String(b.appointment_date)) || String(a.appointment_time).localeCompare(String(b.appointment_time)))
+      .slice(0, 5);
+    const statusCounts = { pending: 0, accepted: 0, declined: 0, cancelled: 0, reschedule_requested: 0 };
+    appts.forEach((a) => {
+      if (statusCounts[a.status] !== undefined) statusCounts[a.status] += 1;
+    });
+    const ob = analytics.outcomeBreakdown?.totals || {};
+
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = v;
+    };
+    set("counselorDashToday", todayAppts.length);
+    set("counselorDashPending", pending.length);
+    set("counselorDashWeek", analytics.weekly ?? 0);
+    set("counselorDashMonth", analytics.monthly ?? 0);
+    set("counselorDashDone", ob.done ?? 0);
+    set("counselorDashReferred", ob.referred ?? 0);
+    set("counselorDashNoShow", ob.noShow ?? 0);
+
+    const todayList = document.getElementById("counselorDashTodayList");
+    if (todayList) {
+      todayList.innerHTML = renderDashApptRows(todayAppts.sort((a, b) => String(a.appointment_time).localeCompare(String(b.appointment_time))), "No sessions scheduled for today.");
+    }
+    const pendingList = document.getElementById("counselorDashPendingList");
+    if (pendingList) {
+      pendingList.innerHTML = renderDashApptRows(pending.slice(0, 5), "No open requests right now.");
+    }
+    const upcomingList = document.getElementById("counselorDashUpcomingList");
+    if (upcomingList) {
+      upcomingList.innerHTML = renderDashApptRows(upcoming, "No upcoming accepted sessions.");
+    }
+    const statusBars = document.getElementById("counselorDashStatusBars");
+    if (statusBars) {
+      statusBars.innerHTML = renderDashStatusBars(statusCounts, appts.length || 1);
+    }
+    const activity = document.getElementById("counselorDashActivity");
+    if (activity) activity.innerHTML = renderDashRecentActivity(state.notifications);
+
+    counselorDashChartDaily = bindOrUpdateLineChart(
+      counselorDashChartDaily,
+      "counselorDashChartDaily",
+      (analytics.chart30Days || []).map((d) => d.label),
+      (analytics.chart30Days || []).map((d) => d.sessions),
+      "Approved sessions",
+      "#283971"
+    );
+    const updated = document.getElementById("counselorDashUpdated");
+    if (updated) updated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  };
+
+  root.innerHTML = `
+    <div class="dash-home">
+      <div class="panel-header dash-panel-header">
+        <div>
+          <h2 class="section-title">Dashboard</h2>
+          <p class="muted tiny">Welcome, ${escapeHtml(state.user?.name || "Counselor")}.</p>
+        </div>
+        <p class="muted tiny" id="counselorDashUpdated"></p>
+      </div>
+      <div class="dash-stat-grid dash-stat-grid--4">
+        <article class="dash-stat-card dash-stat-card--blue">
+          <p class="dash-stat-label">Today</p>
+          <p class="dash-stat-value" id="counselorDashToday">0</p>
+          <p class="dash-stat-sub muted tiny">Sessions on calendar</p>
+        </article>
+        <article class="dash-stat-card dash-stat-card--gold">
+          <p class="dash-stat-label">Open requests</p>
+          <p class="dash-stat-value" id="counselorDashPending">0</p>
+          <p class="dash-stat-sub muted tiny">Pending or reschedule</p>
+        </article>
+        <article class="dash-stat-card dash-stat-card--blue">
+          <p class="dash-stat-label">This week</p>
+          <p class="dash-stat-value" id="counselorDashWeek">0</p>
+          <p class="dash-stat-sub muted tiny">Approved sessions</p>
+        </article>
+        <article class="dash-stat-card dash-stat-card--gold">
+          <p class="dash-stat-label">This month</p>
+          <p class="dash-stat-value" id="counselorDashMonth">0</p>
+          <p class="dash-stat-sub muted tiny">Approved sessions</p>
+        </article>
+      </div>
+      <div class="dash-outcome-strip">
+        <div class="dash-outcome-pill done">Done <strong id="counselorDashDone">0</strong></div>
+        <div class="dash-outcome-pill referred">Referred <strong id="counselorDashReferred">0</strong></div>
+        <div class="dash-outcome-pill no-show">No-show <strong id="counselorDashNoShow">0</strong></div>
+      </div>
+      <div class="dash-layout-grid">
+        <section class="dash-panel">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Today's schedule</h3>
+            <button type="button" class="btn ghost btn-sm" data-dash-nav="Requests">Manage</button>
+          </div>
+          <div id="counselorDashTodayList"></div>
+        </section>
+        <section class="dash-panel">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Open requests</h3>
+            <button type="button" class="btn ghost btn-sm" data-dash-nav="Requests">View all</button>
+          </div>
+          <div id="counselorDashPendingList"></div>
+        </section>
+        <section class="dash-panel">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Upcoming sessions</h3>
+          </div>
+          <div id="counselorDashUpcomingList"></div>
+        </section>
+        <section class="dash-panel">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Booking status</h3>
+          </div>
+          <div id="counselorDashStatusBars"></div>
+        </section>
+        <section class="dash-panel">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Sessions (30 days)</h3>
+            <button type="button" class="btn ghost btn-sm" data-dash-nav="Analytics">Analytics</button>
+          </div>
+          <div class="chart-canvas-wrap chart-canvas-wrap--compact"><canvas id="counselorDashChartDaily" aria-label="Daily sessions chart"></canvas></div>
+        </section>
+        <section class="dash-panel dash-panel--wide">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Recent activity</h3>
+            <button type="button" class="btn ghost btn-sm" data-dash-nav="Notifications">Notifications</button>
+          </div>
+          <div id="counselorDashActivity"></div>
+        </section>
+      </div>
+      ${renderDashQuickLinks("counselor", [
+        { menu: "Requests", title: "Requests", desc: "Accept, decline, mark outcomes" },
+        { menu: "Availability", title: "Availability", desc: "Set open dates and slots" },
+        { menu: "Analytics", title: "Analytics", desc: "Trends and outcomes" }
+      ])}
+    </div>`;
+
+  attachDashQuickLinks("counselor", root);
+  await paint();
+  counselorDashPollTimer = setInterval(async () => {
+    try {
+      await Promise.all([loadAppointments(), loadNotifications()]);
+      analytics = await api("/counselor/analytics");
+      paint();
+    } catch (_e) {
+      paint();
+    }
+  }, 15000);
+}
+
+async function renderAdminDashboard(root) {
+  stopAdminDashPolling();
+  destroyAdminDashCharts();
+  if (adminOverviewPollTimer) {
+    clearInterval(adminOverviewPollTimer);
+    adminOverviewPollTimer = null;
+  }
+
+  let overview = { totalUsers: "—", totalAppointments: "—", pendingRequests: "—" };
+  let summary = null;
+  try {
+    [overview, summary] = await Promise.all([
+      api("/admin/overview"),
+      api("/admin/reports/summary").catch(() => null)
+    ]);
+  } catch (_e) {
+    /* keep placeholders */
+  }
+
+  await loadNotifications();
+  let appts = [];
+  try {
+    appts = await api("/appointments/my");
+  } catch (_e) {
+    appts = [];
+  }
+
+  const statusCounts = { pending: 0, accepted: 0, declined: 0, cancelled: 0, reschedule_requested: 0 };
+  appts.forEach((a) => {
+    if (statusCounts[a.status] !== undefined) statusCounts[a.status] += 1;
+  });
+  const pendingRows = appts
+    .filter((a) => a.status === "pending")
+    .sort((a, b) => String(a.appointment_date).localeCompare(String(b.appointment_date)))
+    .slice(0, 6);
+  const apptStats = summary?.appointments || {};
+
+  const paintOverview = async () => {
+    try {
+      overview = await api("/admin/overview");
+      const u = document.getElementById("adminStatUsers");
+      const b = document.getElementById("adminStatBookings");
+      const p = document.getElementById("adminStatOpen");
+      const a = document.getElementById("adminStatAccepted");
+      if (u) u.textContent = overview.totalUsers;
+      if (b) b.textContent = overview.totalAppointments;
+      if (p) p.textContent = overview.pendingRequests;
+      if (a && apptStats.accepted != null) a.textContent = apptStats.accepted;
+    } catch (_e) {
+      /* ignore */
+    }
+  };
+
+  root.innerHTML = `
+    <div class="dash-home">
+      <div class="panel-header dash-panel-header">
+        <div>
+          <h2 class="section-title">Dashboard</h2>
+          <p class="muted tiny">Welcome, ${escapeHtml(state.user?.name || "Admin")}.</p>
+        </div>
+      </div>
+      <div class="admin-overview-stats dash-stat-grid--5">
+        <div class="admin-stat-card dash-stat-card">
+          <p class="admin-stat-label">Registered users</p>
+          <p class="admin-stat-value" id="adminStatUsers">${overview.totalUsers}</p>
+        </div>
+        <div class="admin-stat-card dash-stat-card">
+          <p class="admin-stat-label">Total bookings</p>
+          <p class="admin-stat-value" id="adminStatBookings">${overview.totalAppointments}</p>
+        </div>
+        <div class="admin-stat-card dash-stat-card">
+          <p class="admin-stat-label">Open requests</p>
+          <p class="admin-stat-value" id="adminStatOpen">${overview.pendingRequests}</p>
+        </div>
+        <div class="admin-stat-card dash-stat-card">
+          <p class="admin-stat-label">Accepted sessions</p>
+          <p class="admin-stat-value" id="adminStatAccepted">${apptStats.accepted ?? "—"}</p>
+        </div>
+        <div class="admin-stat-card dash-stat-card">
+          <p class="admin-stat-label">New (7 days)</p>
+          <p class="admin-stat-value">${summary?.activity?.newAppointmentsLast7d ?? "—"}</p>
+        </div>
+      </div>
+      <div class="dash-layout-grid">
+        <section class="dash-panel">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">System snapshot</h3>
+          </div>
+          <ul class="dash-snapshot-list muted tiny">
+            <li><span>Cancelled</span><strong>${apptStats.cancelled ?? 0}</strong></li>
+            <li><span>Declined</span><strong>${apptStats.declined ?? 0}</strong></li>
+            <li><span>Reschedule requested</span><strong>${apptStats.rescheduleRequested ?? 0}</strong></li>
+            <li><span>Audit entries (24h)</span><strong>${summary?.activity?.auditLogEntriesLast24h ?? 0}</strong></li>
+          </ul>
+        </section>
+        <section class="dash-panel">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Booking status</h3>
+            <button type="button" class="btn ghost btn-sm" data-dash-nav="Appointments">Appointments</button>
+          </div>
+          <div id="adminDashStatusBars">${renderDashStatusBars(statusCounts, appts.length || 1)}</div>
+        </section>
+        <section class="dash-panel">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Pending requests</h3>
+            <button type="button" class="btn ghost btn-sm" data-dash-nav="Appointments">View all</button>
+          </div>
+          ${renderDashApptRows(pendingRows, "No pending requests.")}
+        </section>
+        <section class="dash-panel dash-panel--wide">
+          <div class="dash-panel-head">
+            <h3 class="subsection-title">Recent activity</h3>
+            <button type="button" class="btn ghost btn-sm" data-dash-nav="Notifications">Notifications</button>
+          </div>
+          ${renderDashRecentActivity(state.notifications)}
+        </section>
+      </div>
+      <h3 class="subsection-title u-mt-section">Quick access</h3>
+      <div class="admin-module-grid dash-quick-module-grid">
+        <button type="button" class="admin-module-card dash-quick-card" data-dash-nav="Users">
+          <h3>Users</h3><p class="muted">Create and manage accounts</p>
+        </button>
+        <button type="button" class="admin-module-card dash-quick-card" data-dash-nav="Appointments">
+          <h3>Appointments</h3><p class="muted">Review, reschedule, or delete</p>
+        </button>
+        <button type="button" class="admin-module-card dash-quick-card" data-dash-nav="Calendars">
+          <h3>Calendars</h3><p class="muted">Counselor schedules by year</p>
+        </button>
+        <button type="button" class="admin-module-card dash-quick-card" data-dash-nav="Analytics">
+          <h3>Analytics</h3><p class="muted">Counselor session breakdown</p>
+        </button>
+        <button type="button" class="admin-module-card dash-quick-card" data-dash-nav="Reports">
+          <h3>Reports</h3><p class="muted">Summary exports and stats</p>
+        </button>
+        <button type="button" class="admin-module-card dash-quick-card" data-dash-nav="System Logs">
+          <h3>System logs</h3><p class="muted">Audit trail and actions</p>
+        </button>
+      </div>
+    </div>`;
+
+  attachDashQuickLinks("admin", root);
+  adminOverviewPollTimer = setInterval(paintOverview, 12000);
+}
+
 async function renderNotificationsView(root) {
   await loadNotifications();
   const items = state.notifications || [];
@@ -1945,9 +2517,14 @@ async function renderCounselorView(root, menu) {
     counselorAnalyticsPollTimer = null;
   }
   destroyCounselorAnalyticsCharts();
+  if (menu !== "Dashboard") {
+    stopCounselorDashPolling();
+    destroyCounselorDashCharts();
+  }
   if (!["Calendar", "Availability"].includes(menu)) {
     stopCounselorCalendarPolling();
   }
+  if (menu === "Dashboard") return renderCounselorDashboard(root);
   if (menu === "GCO Services") return renderGcoServicesPage(root);
   if (menu === "Calendar" || menu === "Availability") return renderCounselorCalendar(root);
   if (menu === "Notifications") return renderNotificationsView(root);
@@ -2228,6 +2805,7 @@ function renderGcoServicesPage(root) {
 }
 
 async function renderStudentView(root, menu) {
+  if (menu === "Dashboard") return renderStudentDashboard(root);
   if (menu === "GCO Services") return renderGcoServicesPage(root);
   if (menu === "Book Appointment") {
     await loadCounselors();
@@ -3032,6 +3610,11 @@ async function renderAdminView(root, menu) {
     adminSectionPollTimer = null;
   }
   destroyAdminAnalyticsCharts();
+  if (menu !== "Dashboard") {
+    stopAdminDashPolling();
+    destroyAdminDashCharts();
+  }
+  if (menu === "Dashboard") return renderAdminDashboard(root);
   if (menu === "GCO Services") return renderGcoServicesPage(root);
   if (menu === "Notifications") return renderNotificationsView(root);
   if (menu === "Settings") {
@@ -3233,52 +3816,7 @@ async function renderAdminView(root, menu) {
     return;
   }
   await loadNotifications();
-  let overview = { totalUsers: "—", totalAppointments: "—", pendingRequests: "—" };
-  try {
-    overview = await api("/admin/overview");
-  } catch (_e) {
-    /* keep placeholders */
-  }
-  root.innerHTML = `
-    <div class="panel-header"><h2 class="section-title">Welcome ${escapeHtml(state.user?.name || "Admin")}!</h2></div>
-    <div class="admin-overview-stats">
-      <div class="admin-stat-card">
-        <p class="admin-stat-label">Registered users</p>
-        <p class="admin-stat-value" id="adminStatUsers">${overview.totalUsers}</p>
-      </div>
-      <div class="admin-stat-card">
-        <p class="admin-stat-label">Total bookings</p>
-        <p class="admin-stat-value" id="adminStatBookings">${overview.totalAppointments}</p>
-
-      </div>
-      <div class="admin-stat-card">
-        <p class="admin-stat-label">Open requests</p>
-        <p class="admin-stat-value" id="adminStatOpen">${overview.pendingRequests}</p>
-
-      </div>
-    </div>
-
-      </div>
-
-      </div>
-    </div>
-    <h3>Recent Activity</h3>
-    ${renderRecentActivity(state.notifications)}`;
-
-  const refreshAdminOverview = async () => {
-    try {
-      const o = await api("/admin/overview");
-      const u = document.getElementById("adminStatUsers");
-      const b = document.getElementById("adminStatBookings");
-      const p = document.getElementById("adminStatOpen");
-      if (u) u.textContent = o.totalUsers;
-      if (b) b.textContent = o.totalAppointments;
-      if (p) p.textContent = o.pendingRequests;
-    } catch (_err) {
-      /* leave previous values */
-    }
-  };
-  adminOverviewPollTimer = setInterval(refreshAdminOverview, 12000);
+  root.innerHTML = `<div class="panel-header"><h2 class="section-title">Welcome ${escapeHtml(state.user?.name || "Admin")}!</h2></div><h3>Recent Activity</h3>${renderRecentActivity(state.notifications)}`;
 }
 
 function consumeOAuthTokenFromHash() {
