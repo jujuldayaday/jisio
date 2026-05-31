@@ -3753,17 +3753,21 @@ async function renderAdminReportsPage(root) {
           <div class="kpi"><p>Cancelled</p><strong id="repCan">0</strong></div>
           <div class="kpi"><p>Audit rows (24h)</p><strong id="repLog">0</strong></div>
         </div>
-        <div class="admin-report-actions stack-sm">
-          <button type="button" class="btn primary" id="dlApptCsv">Download appointments (CSV)</button>
-          <button type="button" class="btn primary" id="dlApptJson">Download appointments (JSON)</button>
-          <button type="button" class="btn ghost" id="dlAuditCsv">Download system activity (CSV)</button>
-          <button type="button" class="btn ghost" id="dlSummaryJson">Download summary (JSON)</button>
+        <div class="admin-report-actions">
+          <details class="report-export-dropdown" id="reportExportDropdown">
+            <summary class="btn primary report-export-trigger">Download report</summary>
+            <div class="report-export-menu" role="menu">
+              <button type="button" class="report-export-item" id="dlApptCsv" role="menuitem">Download appointments (CSV)</button>
+              <button type="button" class="report-export-item" id="dlAuditCsv" role="menuitem">Download system activity (CSV)</button>
+            </div>
+          </details>
         </div>
         <h3 class="subsection-title">Counselor workload</h3>
         <div id="repCounselorTable" class="table-wrap"></div>
         <p id="repUpdated" class="muted tiny"></p>
         <p id="repMsg" class="feedback"></p>`;
       document.getElementById("dlApptCsv").onclick = async () => {
+        document.getElementById("reportExportDropdown")?.removeAttribute("open");
         const msg = document.getElementById("repMsg");
         try {
           await downloadWithAuth("/admin/reports/appointments-csv", `gco-appointments-${Date.now()}.csv`);
@@ -3774,40 +3778,12 @@ async function renderAdminReportsPage(root) {
           msg.className = "feedback feedback-error";
         }
       };
-      document.getElementById("dlApptJson").onclick = async () => {
-        const msg = document.getElementById("repMsg");
-        try {
-          await downloadWithAuth("/admin/reports/appointments-json", `gco-appointments-${Date.now()}.json`);
-          msg.textContent = "Appointments JSON download started (includes closed outcomes: done, referred, no-show).";
-          msg.className = "feedback status-success";
-        } catch (e) {
-          msg.textContent = e.message;
-          msg.className = "feedback feedback-error";
-        }
-      };
       document.getElementById("dlAuditCsv").onclick = async () => {
+        document.getElementById("reportExportDropdown")?.removeAttribute("open");
         const msg = document.getElementById("repMsg");
         try {
           await downloadWithAuth("/admin/reports/audit-csv", `gco-system-activity-${Date.now()}.csv`);
           msg.textContent = "Activity log CSV download started.";
-          msg.className = "feedback status-success";
-        } catch (e) {
-          msg.textContent = e.message;
-          msg.className = "feedback feedback-error";
-        }
-      };
-      document.getElementById("dlSummaryJson").onclick = async () => {
-        const msg = document.getElementById("repMsg");
-        try {
-          const fresh = await api("/admin/reports/summary");
-          const blob = new Blob([JSON.stringify(fresh, null, 2)], { type: "application/json" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `gco-report-summary-${Date.now()}.json`;
-          a.click();
-          URL.revokeObjectURL(url);
-          msg.textContent = "Summary JSON download started.";
           msg.className = "feedback status-success";
         } catch (e) {
           msg.textContent = e.message;
