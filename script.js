@@ -404,7 +404,15 @@ const state = {
   counselorUnavail: [],
   profilePicture: "",
   lastSeenNotificationCount: Number(localStorage.getItem("gco_last_seen_notif_count") || 0),
-  adminUsersPage: 1
+  adminUsersPage: 1,
+  adminApptSearch: "",
+  adminApptStatusFilter: "all",
+  adminApptCounselorFilter: "all",
+  adminCalendarPage: "view",
+  adminCalendarCounselorId: null,
+  counselorCalendarPage: "view",
+  counselorCalendarProxyId: null,
+  counselorCalendarRenderOpts: null
 };
 
 const DASHBOARD_MENUS = {
@@ -1672,14 +1680,42 @@ function selectCounselorCalendarDay(date, ctx, { openModal = true } = {}) {
 async function apiGenerateAvailabilitySlots(payload) {
   return api("/counselor/available-dates/generate-slots", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(withCounselorProxy(payload))
   });
 }
 
 async function apiClearAvailabilityDate(date) {
-  return api(`/counselor/available-dates/by-date/${encodeURIComponent(date)}`, {
+  const id = state.counselorCalendarProxyId;
+  const qs = id ? `?counselorId=${encodeURIComponent(id)}` : "";
+  return api(`/counselor/available-dates/by-date/${encodeURIComponent(date)}${qs}`, {
     method: "DELETE"
   });
+}
+
+function withCounselorProxy(payload = {}) {
+  const id = state.counselorCalendarProxyId;
+  if (!id) return payload;
+  return { ...payload, counselorId: id };
+}
+
+function counselorAvailabilityUrl() {
+  const id = state.counselorCalendarProxyId;
+  return id ? `/counselor/availability/${id}` : "/counselor/availability";
+}
+
+function counselorScheduleUrl() {
+  const id = state.counselorCalendarProxyId;
+  return id ? `/counselor/availability-schedule/${id}` : "/counselor/availability-schedule";
+}
+
+function counselorBookingProfileUrl() {
+  const id = state.counselorCalendarProxyId;
+  return id ? `/counselor/booking-profile/${id}` : "/counselor/booking-profile";
+}
+
+function counselorCalendarUrl(year) {
+  const id = state.counselorCalendarProxyId;
+  return id ? `/counselor/calendar?year=${year}&counselorId=${id}` : `/counselor/calendar?year=${year}`;
 }
 
 function validateAvailabilityForm({ dates, dayStart, dayEnd, sessionMinutes, slotInterval }) {
@@ -1707,14 +1743,18 @@ function weekdayLabelForDate(isoDate) {
   return names[dow] || "";
 }
 
-async function renderCounselorCalendar(root) {
+async function renderCounselorCalendar(root, renderOpts = {}) {
   stopCounselorCalendarPolling();
+  const opts = renderOpts.actingCounselorId != null ? renderOpts : state.counselorCalendarRenderOpts || {};
+  state.counselorCalendarProxyId = opts.actingCounselorId || null;
+  state.counselorCalendarRenderOpts = opts;
+  const rerenderCalendar = () => renderCounselorCalendar(root, state.counselorCalendarRenderOpts || {});
   const year = state.calendarYear || new Date().getFullYear();
   const [calendar, availability, dateSchedule, bookingProfile] = await Promise.all([
-    api(`/counselor/calendar?year=${year}`),
-    api("/counselor/availability"),
-    api("/counselor/availability-schedule"),
-    api("/counselor/booking-profile")
+    api(counselorCalendarUrl(year)),
+    api(counselorAvailabilityUrl()),
+    api(counselorScheduleUrl()),
+    api(counselorBookingProfileUrl())
   ]);
   const scheduleByDate = new Map((dateSchedule || []).map((d) => [d.availableDate, d]));
   const lunchBreaks = deriveLunchBreaksFromWindows(bookingProfile?.windows);
@@ -1737,10 +1777,11 @@ async function renderCounselorCalendar(root) {
   root.innerHTML = `
     <div class="panel-header">
       <div>
-        <h2 class="section-title">Calendar and Availability</h2>
-        <p class="muted">Select dates on the calendar, set hours, then generate bookable slots for students.</p>
+        <h2 class="section-title">${opts.actingCounselorId ? "Counselor Availability" : "Calendar and Availability"}${opts.titleSuffix ? escapeHtml(opts.titleSuffix) : ""}</h2>
+        <p class="muted">${opts.actingCounselorId ? "Admin: manage this counselor's open slots and unavailability." : "Select dates on the calendar, set hours, then generate bookable slots for students."}</p>
         <p class="muted tiny">Last updated: ${refreshedAt.toLocaleTimeString()}</p>
       </div>
+      ${opts.showBack ? `<button type="button" class="btn ghost" id="counselorCalendarBackBtn">← Back to calendar</button>` : ""}
     </div>
     <div class="card stack-md section-block">
       <h3>Set Availability</h3>
@@ -1977,12 +2018,15 @@ async function renderCounselorCalendar(root) {
 
   bindCounselorCalendarDayClicks(state.counselorCalendarCtx || calendarCtx);
 
+  document.getElementById("counselorCalendarBackBtn")?.addEventListener("click", () => {
+    state.counselorCalendarProxyId = null;
+    state.counselorCalendarRenderOpts = null;
+    if (typeof opts.onBack === "function") opts.onBack();
+  });
+
   async function refreshAfterScheduleChange() {
     const y = state.calendarYear || new Date().getFullYear();
-    const [cal, sched] = await Promise.all([
-      api(`/counselor/calendar?year=${y}`),
-      api("/counselor/availability-schedule")
-    ]);
+    const [cal, sched] = await Promise.all([api(counselorCalendarUrl(y)), api(counselorScheduleUrl())]);
     const dw =
       state.counselorCalendarCtx?.dayWindow || {
         start: defaultDayStart,
@@ -2119,16 +2163,18 @@ async function renderCounselorCalendar(root) {
     try {
       await api("/counselor/availability", {
         method: "POST",
-        body: JSON.stringify({
-          unavailable_date: date,
-          start_time: startTime,
-          end_time: endTime,
-          message: reason || null
-        })
+        body: JSON.stringify(
+          withCounselorProxy({
+            unavailable_date: date,
+            start_time: startTime,
+            end_time: endTime,
+            message: reason || null
+          })
+        )
       });
       msg.textContent = "Unavailability saved.";
       msg.className = "feedback status-success";
-      await renderCounselorCalendar(root);
+      await rerenderCalendar();
     } catch (err) {
       msg.textContent = err.message;
       msg.className = "feedback feedback-error";
@@ -2138,17 +2184,17 @@ async function renderCounselorCalendar(root) {
   document.querySelectorAll(".remove-unavailable").forEach((btn) => {
     btn.onclick = async () => {
       await api(`/counselor/availability/${btn.dataset.id}`, { method: "DELETE" });
-      await renderCounselorCalendar(root);
+      await rerenderCalendar();
     };
   });
 
   document.getElementById("prevYearBtn").onclick = async () => {
     state.calendarYear = year - 1;
-    await renderCounselorCalendar(root);
+    await rerenderCalendar();
   };
   document.getElementById("nextYearBtn").onclick = async () => {
     state.calendarYear = year + 1;
-    await renderCounselorCalendar(root);
+    await rerenderCalendar();
   };
 }
 
@@ -2907,9 +2953,35 @@ async function renderCounselorView(root, menu) {
   if (!["Calendar", "Availability"].includes(menu)) {
     stopCounselorCalendarPolling();
   }
+  if (menu !== "Availability") {
+    state.counselorCalendarPage = "view";
+    state.counselorCalendarProxyId = null;
+    state.counselorCalendarRenderOpts = null;
+  }
   if (menu === "Dashboard") return renderCounselorDashboard(root);
   if (menu === "GCO Services") return renderGcoServicesPage(root);
-  if (menu === "Calendar" || menu === "Availability") return renderCounselorCalendar(root);
+  if (menu === "Availability") {
+    if (state.counselorCalendarPage === "availability") {
+      return renderCounselorCalendar(root, {
+        showBack: true,
+        onBack: () => {
+          state.counselorCalendarPage = "view";
+          state.counselorCalendarProxyId = null;
+          state.counselorCalendarRenderOpts = null;
+          renderCounselorView(root, "Availability");
+        }
+      });
+    }
+    return renderCalendarOverviewPage(root, {
+      mode: "counselor",
+      title: "My Calendar",
+      subtitle: "See your booked sessions and blocked dates, then open availability settings on the next page.",
+      onNext: () => {
+        state.counselorCalendarPage = "availability";
+        renderCounselorView(root, "Availability");
+      }
+    });
+  }
   if (menu === "Notifications") return renderNotificationsView(root);
   if (menu === "Settings") return renderAccountSettings(root);
   if (menu === "Requests") {
@@ -4051,6 +4123,310 @@ async function renderAdminAnalyticsPage_legacy(root) {
   if (counselors.length) adminSectionPollTimer = setInterval(paint, 14000);
 }
 
+function counselorIdByName(name, counselors) {
+  const n = String(name || "").trim().toLowerCase();
+  const hit = (counselors || []).find((c) => String(c.name || "").trim().toLowerCase() === n);
+  return hit ? hit.id : null;
+}
+
+function filterAdminAppointments(rows, counselors) {
+  const q = (state.adminApptSearch || "").trim().toLowerCase();
+  const statusF = state.adminApptStatusFilter || "all";
+  const counselorF = state.adminApptCounselorFilter || "all";
+  return (rows || []).filter((a) => {
+    if (statusF !== "all" && String(a.status) !== statusF) return false;
+    if (counselorF !== "all") {
+      const cid = counselorIdByName(a.counselor_name, counselors);
+      if (String(cid) !== String(counselorF)) return false;
+    }
+    if (!q) return true;
+    const hay = [
+      a.booking_code,
+      a.student_name,
+      a.counselor_name,
+      a.service_type,
+      a.status,
+      formatDisplayDate(a.appointment_date),
+      formatDisplayTime(a.appointment_time)
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+function countAppointmentsByStatus(rows) {
+  const counts = {
+    pending: 0,
+    accepted: 0,
+    reschedule_requested: 0,
+    declined: 0,
+    cancelled: 0
+  };
+  (rows || []).forEach((a) => {
+    const s = String(a.status || "");
+    if (Object.prototype.hasOwnProperty.call(counts, s)) counts[s] += 1;
+  });
+  return counts;
+}
+
+async function renderCalendarOverviewPage(root, opts = {}) {
+  const mode = opts.mode || "admin";
+  const year = state.calendarYear || new Date().getFullYear();
+  if (mode === "admin") await loadCounselors();
+  let counselorId =
+    mode === "admin"
+      ? state.adminCalendarCounselorId || state.counselors[0]?.id || null
+      : state.user?.id || null;
+
+  const counselorOptions =
+    mode === "admin"
+      ? state.counselors
+          .map(
+            (c) =>
+              `<option value="${c.id}"${Number(c.id) === Number(counselorId) ? " selected" : ""}>${escapeHtml(c.name)}</option>`
+          )
+          .join("")
+      : "";
+
+  root.innerHTML = `
+    <div class="panel-header">
+      <div>
+        <h2 class="section-title">${escapeHtml(opts.title || (mode === "admin" ? "Counselor Calendar" : "My Calendar"))}</h2>
+        <p class="muted">${escapeHtml(opts.subtitle || "Review booked sessions and blocked dates for the year.")}</p>
+      </div>
+      <button type="button" class="btn primary" id="calendarOverviewNextBtn">Set availability / unavailability →</button>
+    </div>
+    ${
+      mode === "admin"
+        ? `<div class="card stack-md section-block admin-calendar-toolbar">
+        <label class="field"><span>Select Counselor</span><select id="adminCounselorSelect">${counselorOptions}</select></label>
+      </div>`
+        : ""
+    }
+    <div class="year-nav admin-calendar-year-nav">
+      <button type="button" class="btn ghost" id="overviewPrevYearBtn" aria-label="Previous year">←</button>
+      <strong id="overviewYearLabel">${year}</strong>
+      <button type="button" class="btn ghost" id="overviewNextYearBtn" aria-label="Next year">→</button>
+    </div>
+    <div id="calendarOverviewArea" class="admin-calendar-area"><p class="muted">Loading calendar…</p></div>
+  `;
+
+  async function paintCalendar() {
+    const cid =
+      mode === "admin"
+        ? Number(document.getElementById("adminCounselorSelect")?.value || counselorId)
+        : counselorId;
+    if (!cid) {
+      document.getElementById("calendarOverviewArea").innerHTML =
+        '<p class="muted">No counselor selected.</p>';
+      return;
+    }
+    if (mode === "admin") state.adminCalendarCounselorId = cid;
+    const y = state.calendarYear || new Date().getFullYear();
+    document.getElementById("overviewYearLabel").textContent = String(y);
+    const url =
+      mode === "admin"
+        ? `/counselor/calendar?year=${y}&counselorId=${cid}`
+        : `/counselor/calendar?year=${y}`;
+    const data = await api(url);
+    const apptCount = (data.appointments || []).length;
+    const unavailCount = (data.unavailable || []).length;
+    const area = document.getElementById("calendarOverviewArea");
+    area.innerHTML = `
+      <div class="admin-calendar-summary">
+        <span class="pill">${apptCount} active session${apptCount === 1 ? "" : "s"}</span>
+        <span class="pill">${unavailCount} unavailability block${unavailCount === 1 ? "" : "s"}</span>
+      </div>
+      <div class="year-calendar-grid">${buildYearCalendar(y, data.appointments || [], data.unavailable || [])}</div>
+    `;
+  }
+
+  document.getElementById("adminCounselorSelect")?.addEventListener("change", () => {
+    paintCalendar().catch((err) => {
+      document.getElementById("calendarOverviewArea").innerHTML = `<p class="feedback feedback-error">${escapeHtml(err.message)}</p>`;
+    });
+  });
+  document.getElementById("overviewPrevYearBtn").onclick = async () => {
+    state.calendarYear = (state.calendarYear || new Date().getFullYear()) - 1;
+    await paintCalendar();
+  };
+  document.getElementById("overviewNextYearBtn").onclick = async () => {
+    state.calendarYear = (state.calendarYear || new Date().getFullYear()) + 1;
+    await paintCalendar();
+  };
+  document.getElementById("calendarOverviewNextBtn").onclick = () => {
+    if (typeof opts.onNext === "function") opts.onNext();
+  };
+
+  await paintCalendar();
+}
+
+async function renderAdminAppointmentsPage(root) {
+  const rows = await api("/appointments/my");
+  await loadCounselors();
+  const counselors = state.counselors || [];
+  const counts = countAppointmentsByStatus(rows);
+  const counselorOpts = `<option value="all"${state.adminApptCounselorFilter === "all" ? " selected" : ""}>All counselors</option>${counselors
+    .map(
+      (c) =>
+        `<option value="${c.id}"${String(state.adminApptCounselorFilter) === String(c.id) ? " selected" : ""}>${escapeHtml(c.name)}</option>`
+    )
+    .join("")}`;
+  const statusOpts = [
+    ["all", "All statuses"],
+    ["pending", "Pending"],
+    ["accepted", "Accepted"],
+    ["reschedule_requested", "Reschedule requested"],
+    ["declined", "Declined"],
+    ["cancelled", "Cancelled"]
+  ]
+    .map(
+      ([val, label]) =>
+        `<option value="${val}"${state.adminApptStatusFilter === val ? " selected" : ""}>${label}</option>`
+    )
+    .join("");
+
+  root.innerHTML = `
+    <div class="panel-header">
+      <div>
+        <h2 class="section-title">Appointments</h2>
+        <p class="muted">Monitor all bookings — search, filter by status or counselor, and open a counselor's schedule.</p>
+      </div>
+    </div>
+    <div class="admin-appt-stats">
+      ${renderDashStatCard("Total", rows.length, "All records", "blue")}
+      ${renderDashStatCard("Pending", counts.pending, "Awaiting counselor", "gold")}
+      ${renderDashStatCard("Accepted", counts.accepted, "Confirmed sessions", "blue")}
+      ${renderDashStatCard("Reschedule", counts.reschedule_requested, "Needs action", "gold")}
+    </div>
+    <div class="admin-monitor-toolbar card stack-md section-block">
+      <label class="field admin-monitor-search">
+        <span>Search</span>
+        <input type="search" id="adminApptSearch" placeholder="Code, student, counselor, service…" value="${escapeHtml(state.adminApptSearch)}" />
+      </label>
+      <div class="admin-monitor-filters">
+        <label class="field"><span>Status</span><select id="adminApptStatusFilter">${statusOpts}</select></label>
+        <label class="field"><span>Counselor</span><select id="adminApptCounselorFilter">${counselorOpts}</select></label>
+      </div>
+      <p class="muted tiny" id="adminApptResultCount"></p>
+    </div>
+    <div class="table-wrap admin-appt-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Code</th><th>Student</th><th>Counselor</th><th>Service</th><th>Date</th><th>Time</th><th>Status</th><th>Student cancellation</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="adminApptTbody"></tbody>
+      </table>
+    </div>
+    <p id="adminApptMsg" class="feedback"></p>
+  `;
+
+  function paintRows() {
+    const filtered = filterAdminAppointments(rows, counselors);
+    const tbody = document.getElementById("adminApptTbody");
+    const countEl = document.getElementById("adminApptResultCount");
+    if (countEl) {
+      countEl.textContent = `Showing ${filtered.length} of ${rows.length} appointment${rows.length === 1 ? "" : "s"}`;
+    }
+    if (!tbody) return;
+    tbody.innerHTML = filtered.length
+      ? filtered.map((a) => renderAdminApptRow(a, counselors)).join("")
+      : `<tr><td colspan="9" class="muted">No appointments match your filters.</td></tr>`;
+    wireAdminApptActions(root, "Appointments");
+  }
+
+  document.getElementById("adminApptSearch")?.addEventListener("input", (e) => {
+    state.adminApptSearch = e.target.value;
+    paintRows();
+  });
+  document.getElementById("adminApptStatusFilter")?.addEventListener("change", (e) => {
+    state.adminApptStatusFilter = e.target.value;
+    paintRows();
+  });
+  document.getElementById("adminApptCounselorFilter")?.addEventListener("change", (e) => {
+    state.adminApptCounselorFilter = e.target.value;
+    paintRows();
+  });
+
+  paintRows();
+}
+
+function renderAdminApptRow(a, counselors) {
+  const cid = counselorIdByName(a.counselor_name, counselors);
+  const scheduleBtn = cid
+    ? `<button type="button" class="btn ghost admin-monitor-schedule" data-counselor-id="${cid}">View schedule</button>`
+    : "";
+  return `<tr>
+    <td>${escapeHtml(a.booking_code)}</td>
+    <td>${escapeHtml(a.student_name || "—")}</td>
+    <td>${escapeHtml(a.counselor_name || "—")}</td>
+    <td>${escapeHtml(a.service_type || "—")}</td>
+    <td>${formatDisplayDate(a.appointment_date)}</td>
+    <td>${formatDisplayTime(a.appointment_time)}</td>
+    <td>${renderDashStatusBadge(a.status)}</td>
+    <td>${a.student_cancellation_reason ? escapeHtml(a.student_cancellation_reason) : "—"}</td>
+    <td><div class="admin-appt-actions">${scheduleBtn}<button type="button" class="btn ghost admin-resched" data-id="${a.id}">Request Reschedule</button><button type="button" class="btn danger admin-delete-appt" data-id="${a.id}" data-code="${escapeHtml(a.booking_code)}" data-student="${escapeHtml(a.student_name || "—")}">Delete</button></div></td>
+  </tr>`;
+}
+
+function wireAdminApptActions(root, menu) {
+  root.querySelectorAll(".admin-monitor-schedule").forEach((btn) => {
+    btn.onclick = () => {
+      state.adminCalendarCounselorId = Number(btn.dataset.counselorId);
+      state.adminCalendarPage = "view";
+      navigateDashboard("admin", "Calendars");
+    };
+  });
+  root.querySelectorAll(".admin-resched").forEach((btn) => {
+    btn.onclick = async () => {
+      if (!confirm("Are you sure you want to reschedule this?")) return;
+      const msg = document.getElementById("adminApptMsg");
+      try {
+        await api(`/appointments/${btn.dataset.id}/status`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: "reschedule_requested" })
+        });
+        msg.textContent = "Reschedule request sent.";
+        msg.className = "feedback status-success";
+        await renderAdminView(root, menu);
+      } catch (err) {
+        msg.textContent = err.message;
+        msg.className = "feedback feedback-error";
+      }
+    };
+  });
+  root.querySelectorAll(".admin-delete-appt").forEach((btn) => {
+    btn.onclick = async () => {
+      const code = btn.dataset.code || "this appointment";
+      const student = btn.dataset.student || "";
+      const ok = await showConfirmDialog({
+        title: "Delete appointment?",
+        message: `You are about to permanently delete booking ${code}.`,
+        detail: student
+          ? `Student: ${student}\n\nThis will remove the appointment from the system. This cannot be undone.`
+          : "This will remove the appointment from the system. This cannot be undone.",
+        confirmLabel: "Yes, delete appointment",
+        cancelLabel: "Keep appointment"
+      });
+      if (!ok) return;
+      const msg = document.getElementById("adminApptMsg");
+      try {
+        await api(`/admin/appointments/${btn.dataset.id}`, { method: "DELETE" });
+        msg.textContent = "Appointment deleted.";
+        msg.className = "feedback status-success";
+        await renderAdminView(root, menu);
+      } catch (err) {
+        msg.textContent = err.message;
+        msg.className = "feedback feedback-error";
+      }
+    };
+  });
+}
+
 async function renderAdminView(root, menu) {
   // Clear all polls before new view
   if (adminOverviewPollTimer) {
@@ -4065,6 +4441,9 @@ async function renderAdminView(root, menu) {
   if (menu !== "Dashboard") {
     stopAdminDashPolling();
     destroyAdminDashCharts();
+  }
+  if (menu !== "Calendars") {
+    state.adminCalendarPage = "view";
   }
   if (menu === "Dashboard") return renderAdminDashboard(root);
   if (menu === "GCO Services") return renderGcoServicesPage(root);
@@ -4195,71 +4574,35 @@ async function renderAdminView(root, menu) {
     return;
   }
   if (menu === "Appointments") {
-    const rows = await api("/appointments/my");
-    root.innerHTML = `<div class="panel-header"><h2 class="section-title">Appointments</h2></div><div class="table-wrap"><table><thead><tr><th>Code</th><th>Student</th><th>Counselor</th><th>Date</th><th>Time</th><th>Status</th><th>Student cancellation</th><th>Action</th></tr></thead><tbody>${rows.map((a) => `<tr><td>${escapeHtml(a.booking_code)}</td><td>${escapeHtml(a.student_name || "—")}</td><td>${escapeHtml(a.counselor_name || "—")}</td><td>${a.appointment_date}</td><td>${String(a.appointment_time).slice(0, 5)}</td><td>${a.status}</td><td>${a.student_cancellation_reason ? escapeHtml(a.student_cancellation_reason) : "—"}</td><td><button type="button" class="btn ghost admin-resched" data-id="${a.id}">Request Reschedule</button><button type="button" class="btn danger admin-delete-appt" data-id="${a.id}" data-code="${escapeHtml(a.booking_code)}" data-student="${escapeHtml(a.student_name || "—")}">Delete</button></td></tr>`).join("")}</tbody></table></div><p id="adminApptMsg" class="feedback"></p>`;
-    document.querySelectorAll(".admin-resched").forEach((btn) => {
-      btn.onclick = async () => {
-        if (!confirm("Are you sure you want to reschedule this?")) return;
-        const msg = document.getElementById("adminApptMsg");
-        try {
-          await api(`/appointments/${btn.dataset.id}/status`, { method: "PATCH", body: JSON.stringify({ status: "reschedule_requested" }) });
-          msg.textContent = "Reschedule request sent.";
-          msg.className = "feedback status-success";
-          await renderAdminView(root, menu);
-        } catch (err) {
-          msg.textContent = err.message;
-          msg.className = "feedback feedback-error";
-        }
-      };
-    });
-    document.querySelectorAll(".admin-delete-appt").forEach((btn) => {
-      btn.onclick = async () => {
-        const code = btn.dataset.code || "this appointment";
-        const student = btn.dataset.student || "";
-        const ok = await showConfirmDialog({
-          title: "Delete appointment?",
-          message: `You are about to permanently delete booking ${code}.`,
-          detail: student
-            ? `Student: ${student}\n\nThis will remove the appointment from the system. This cannot be undone.`
-            : "This will remove the appointment from the system. This cannot be undone.",
-          confirmLabel: "Yes, delete appointment",
-          cancelLabel: "Keep appointment"
-        });
-        if (!ok) return;
-        const msg = document.getElementById("adminApptMsg");
-        try {
-          await api(`/admin/appointments/${btn.dataset.id}`, { method: "DELETE" });
-          msg.textContent = "Appointment deleted.";
-          msg.className = "feedback status-success";
-          await renderAdminView(root, menu);
-        } catch (err) {
-          msg.textContent = err.message;
-          msg.className = "feedback feedback-error";
-        }
-      };
-    });
+    await renderAdminAppointmentsPage(root);
     return;
   }
   if (menu === "Calendars") {
-    await loadCounselors();
-    const year = state.calendarYear || new Date().getFullYear();
-    root.innerHTML = `
-      <div class="panel-header"><h2 class="section-title">Counselor Calendar</h2></div>
-      <div class="card stack-md section-block">
-        <label class="field"><span>Select Counselor</span><select id="adminCounselorSelect">${state.counselors.map((c) => `<option value="${c.id}">${c.name}</option>`).join("")}</select></label>
-        <div class="auth-actions"><button id="adminLoadCalendar" class="btn primary">Load Calendar</button></div>
-      </div>
-      <div id="adminCalendarArea"></div>
-    `;
-    const loadAdminCalendar = async () => {
-      const counselorId = Number(document.getElementById("adminCounselorSelect").value);
-      const data = await api(`/counselor/calendar?year=${year}&counselorId=${counselorId}`);
-      const area = document.getElementById("adminCalendarArea");
-      area.innerHTML = `<div class="year-header"><strong>${year}</strong></div><div class="year-calendar-grid">${buildYearCalendar(year, data.appointments || [], data.unavailable || [])}</div>`;
-    };
-    document.getElementById("adminLoadCalendar").onclick = loadAdminCalendar;
-    await loadAdminCalendar();
-    return;
+    if (state.adminCalendarPage === "availability") {
+      await loadCounselors();
+      const cid = state.adminCalendarCounselorId || state.counselors[0]?.id;
+      const cName = state.counselors.find((c) => Number(c.id) === Number(cid))?.name || "";
+      return renderCounselorCalendar(root, {
+        actingCounselorId: cid,
+        titleSuffix: cName ? ` — ${cName}` : "",
+        showBack: true,
+        onBack: () => {
+          state.adminCalendarPage = "view";
+          state.counselorCalendarProxyId = null;
+          state.counselorCalendarRenderOpts = null;
+          renderAdminView(root, "Calendars");
+        }
+      });
+    }
+    return renderCalendarOverviewPage(root, {
+      mode: "admin",
+      onNext: async () => {
+        const sel = document.getElementById("adminCounselorSelect");
+        state.adminCalendarCounselorId = sel ? Number(sel.value) : state.adminCalendarCounselorId;
+        state.adminCalendarPage = "availability";
+        await renderAdminView(root, "Calendars");
+      }
+    });
   }
   if (menu === "Analytics") {
     await renderAdminAnalyticsPage(root);
