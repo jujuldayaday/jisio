@@ -191,6 +191,7 @@ router.post("/", requireRole("student"), async (req, res) => {
 
 router.patch("/:id/status", requireRole("student", "counselor", "admin"), async (req, res) => {
   const { status } = req.body;
+  const message = typeof req.body.message === "string" ? req.body.message.trim() : "";
   const allowedByRole = {
     student: ["reschedule_requested"],
     counselor: ["accepted", "declined", "cancelled", "reschedule_requested"],
@@ -225,7 +226,7 @@ router.patch("/:id/status", requireRole("student", "counselor", "admin"), async 
   await db.query("INSERT INTO audit_logs (actor_id, action, meta) VALUES (?, ?, ?)", [
     req.user.id,
     "appointment_status_updated",
-    JSON.stringify({ appointmentId, status })
+    JSON.stringify({ appointmentId, status, message: message || undefined })
   ]);
 
   const statusTitles = {
@@ -243,6 +244,9 @@ router.patch("/:id/status", requireRole("student", "counselor", "admin"), async 
     cancelled: `Your ${appt.service_type} session on ${apptDateStr} at ${apptTimeStr} has been cancelled (Ref: ${appt.booking_code}).`,
     reschedule_requested: `A reschedule is needed for your ${appt.service_type} session on ${apptDateStr} at ${apptTimeStr}. Please log in and choose another slot (Ref: ${appt.booking_code}).`
   };
+  if (message && status === "reschedule_requested") {
+    statusMessages.reschedule_requested += ` Message from counselor: ${message}`;
+  }
 
   const admins = await getAdminUsers(db);
   await insertNotification(db, {
