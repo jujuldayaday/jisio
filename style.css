@@ -2606,6 +2606,29 @@ th {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
 }
 
+.gco-fb-link-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 1.15rem 1.25rem;
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #ffffff 0%, #fafcff 100%);
+  border: 1px solid var(--slate-100);
+  box-shadow: 0 8px 28px rgba(16, 47, 116, 0.06);
+}
+
+.gco-fb-link-card .service-card-body {
+  margin-top: 0.35rem;
+}
+
+body.dark-mode .gco-fb-link-card {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
 .service-card {
   margin: 0;
   padding: 1.15rem 1.25rem;
