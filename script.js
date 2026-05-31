@@ -3312,6 +3312,13 @@ function renderGcoServicesPage(root) {
         <p class="muted">Programs offered through the Guidance and Counseling Office.</p>
       </div>
     </div>
+    <article class="gco-fb-link-card">
+      <div>
+        <h3 class="service-card-title">GCO Facebook page</h3>
+        <p class="service-card-body">Follow the Guidance and Counseling Office on Facebook for updates, announcements, and resources.</p>
+      </div>
+      <a href="https://tinyurl.com/GCO-FBPage" target="_blank" rel="noopener noreferrer" class="btn primary">Visit GCO Facebook page</a>
+    </article>
     <div class="services-grid">
       ${services
         .map(
