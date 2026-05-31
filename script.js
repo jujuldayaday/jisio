@@ -2932,7 +2932,7 @@ async function renderCounselorView(root, menu) {
       </div>`;
     };
 
-    const pendingTable = `<div class="table-wrap"><table><thead><tr><th>Code</th><th>Date</th><th>Time</th><th>Status</th><th>Action</th></tr></thead><tbody>${openRequests.map((a) => {
+    const pendingTable = `<div class="table-wrap"><table><thead><tr><th>Code</th><th>Date</th><th>Time</th><th>Status</th><th>Student</th><th>Service</th><th>Action</th></tr></thead><tbody>${openRequests.map((a) => {
       const actions = a.status === "pending"
         ? `<div class="request-action-group">
             <button class="btn primary approve-btn" data-id="${a.id}">Accept</button>
@@ -2940,8 +2940,8 @@ async function renderCounselorView(root, menu) {
             <button class="btn ghost reschedule-btn" data-id="${a.id}" data-code="${escapeHtml(a.booking_code)}">Reschedule</button>
           </div>`
         : `<span class="muted">—</span>`;
-      return `<tr><td>${escapeHtml(a.booking_code)}</td><td>${formatDisplayDate(a.appointment_date)}</td><td>${formatDisplayTime(a.appointment_time)}</td><td>${a.status}</td><td>${actions}</td></tr>`;
-    }).join("") || `<tr><td colspan="5">No open requests</td></tr>`}</tbody></table></div>`;
+      return `<tr><td>${escapeHtml(a.booking_code)}</td><td>${formatDisplayDate(a.appointment_date)}</td><td>${formatDisplayTime(a.appointment_time)}</td><td>${a.status}</td><td>${escapeHtml(a.student_name || "—")}</td><td>${escapeHtml(a.service_type || "—")}</td><td>${actions}</td></tr>`;
+    }).join("") || `<tr><td colspan="7">No open requests</td></tr>`}</tbody></table></div>`;
 
     const activeTable = `<div class="table-wrap u-mt-section"><table><thead><tr><th>Date / Time</th><th>Student</th><th>Service Type</th><th>Student Cancellation</th><th>Status</th><th>Action</th></tr></thead><tbody>${activeRows.map((a) => `<tr>
       <td>${formatDateTime(a)}</td>
