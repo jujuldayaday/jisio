@@ -2404,6 +2404,64 @@ textarea,
   margin: 1rem 0 0.5rem;
 }
 
+.report-export-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.report-export-dropdown > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.report-export-dropdown > summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-export-trigger::after {
+  content: " ▾";
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+.report-export-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 20;
+  min-width: 16.5rem;
+  padding: 0.35rem;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 0.5rem;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+.report-export-item {
+  display: block;
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border: none;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.report-export-item:hover,
+.report-export-item:focus-visible {
+  background: rgba(184, 137, 27, 0.12);
+  outline: none;
+}
+
+body.dark-mode .report-export-menu {
+  background: var(--surface-elevated, #1e293b);
+  border-color: rgba(148, 163, 184, 0.25);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
 .log-meta-cell {
   max-width: 24rem;
   font-size: 0.82rem;
