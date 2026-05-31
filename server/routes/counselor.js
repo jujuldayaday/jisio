@@ -20,6 +20,16 @@ const {
 const router = express.Router();
 router.use(requireAuth);
 
+function resolveTargetCounselorId(req) {
+  if (req.user.role === "admin") {
+    const raw = req.body?.counselorId ?? req.query?.counselorId;
+    const id = Number(raw);
+    if (!Number.isInteger(id) || id <= 0) return { error: "counselorId is required for admin." };
+    return { id };
+  }
+  return { id: req.user.id };
+}
+
 router.get("/analytics", requireRole("counselor"), async (req, res) => {
   const db = getPool();
   const data = await getCounselorSessionAnalytics(db, req.user.id);
@@ -106,7 +116,10 @@ function timeRangesOverlap(startA, endA, startB, endB) {
   return a0 < b1 && b0 < a1;
 }
 
-router.post("/availability", requireRole("counselor"), async (req, res) => {
+router.post("/availability", requireRole("counselor", "admin"), async (req, res) => {
+  const target = resolveTargetCounselorId(req);
+  if (target.error) return res.status(400).json({ message: target.error });
+  const counselorId = target.id;
   const { unavailable_date, message, start_time, end_time } = req.body;
   if (!unavailable_date) return res.status(400).json({ message: "unavailable_date is required" });
 
@@ -127,7 +140,7 @@ router.post("/availability", requireRole("counselor"), async (req, res) => {
       `SELECT id FROM appointments
        WHERE counselor_id = ? AND appointment_date = ? AND status = 'accepted'
        LIMIT 1`,
-      [req.user.id, unavailable_date]
+      [counselorId, unavailable_date]
     );
     if (conflicts.length > 0) {
       return res.status(409).json({ message: "Cannot set unavailable date with confirmed appointments. Cancel/reschedule first." });
@@ -138,7 +151,7 @@ router.post("/availability", requireRole("counselor"), async (req, res) => {
        WHERE counselor_id = ? AND appointment_date = ? AND status = 'accepted'
          AND appointment_time >= ? AND appointment_time < ?
        LIMIT 1`,
-      [req.user.id, unavailable_date, startT || "00:00:00", endT || "23:59:59"]
+      [counselorId, unavailable_date, startT || "00:00:00", endT || "23:59:59"]
     );
     if (conflicts.length > 0) {
       return res.status(409).json({ message: "Cannot block this time slot — accepted appointment exists. Cancel/reschedule first." });
@@ -149,7 +162,7 @@ router.post("/availability", requireRole("counselor"), async (req, res) => {
     const [result] = await db.query(
       `INSERT INTO counselor_unavailabilities (counselor_id, unavailable_date, start_time, end_time, message)
        VALUES (?, ?, ?, ?, ?)`,
-      [req.user.id, unavailable_date, startT, endT, message || null]
+      [counselorId, unavailable_date, startT, endT, message || null]
     );
     res.status(201).json({ id: result.insertId });
   } catch (err) {
@@ -158,7 +171,7 @@ router.post("/availability", requireRole("counselor"), async (req, res) => {
   }
 });
 
-router.delete("/availability/:id", requireRole("counselor"), async (req, res) => {
+router.delete("/availability/:id", requireRole("counselor", "admin"), async (req, res) => {
   const availabilityId = Number(req.params.id);
   const db = getPool();
   const [rows] = await db.query(
@@ -166,7 +179,9 @@ router.delete("/availability/:id", requireRole("counselor"), async (req, res) =>
     [availabilityId]
   );
   if (!rows[0]) return res.status(404).json({ message: "Entry not found" });
-  if (rows[0].counselor_id !== req.user.id) return res.status(403).json({ message: "Not authorized" });
+  if (req.user.role === "counselor" && rows[0].counselor_id !== req.user.id) {
+    return res.status(403).json({ message: "Not authorized" });
+  }
 
   await db.query("DELETE FROM counselor_unavailabilities WHERE id = ?", [availabilityId]);
   res.json({ ok: true });
@@ -302,13 +317,16 @@ router.get("/availability-schedule/:counselorId", requireRole("student", "admin"
   res.json(schedule);
 });
 
-router.post("/available-dates/generate-slots", requireRole("counselor"), async (req, res) => {
+router.post("/available-dates/generate-slots", requireRole("counselor", "admin"), async (req, res) => {
+  const target = resolveTargetCounselorId(req);
+  if (target.error) return res.status(400).json({ message: target.error });
+  const counselorId = target.id;
   const db = getPool();
-  const [users] = await db.query("SELECT full_name, email FROM users WHERE id = ?", [req.user.id]);
+  const [users] = await db.query("SELECT full_name, email FROM users WHERE id = ?", [counselorId]);
   const u = users[0];
-  if (!u) return res.status(401).json({ message: "User not found." });
+  if (!u) return res.status(404).json({ message: "Counselor not found." });
 
-  const result = await generateSlotsForCounselor(db, req.user.id, u.full_name, u.email, req.body);
+  const result = await generateSlotsForCounselor(db, counselorId, u.full_name, u.email, req.body);
   if (!result.ok) return res.status(result.status || 400).json({ message: result.message });
   res.status(201).json(result);
 });
@@ -318,6 +336,20 @@ router.get("/booking-profile", requireRole("counselor"), async (req, res) => {
   const [users] = await db.query("SELECT full_name, email FROM users WHERE id = ?", [req.user.id]);
   const u = users[0];
   if (!u) return res.status(401).json({ message: "User not found." });
+  const profile = resolveCounselorProfile(u.full_name, u.email);
+  res.json({
+    windows: profile.windows,
+    sessionMinutes: profile.sessionMinutes,
+    lunchBreaks: deriveBreaksFromWindows(profile.windows)
+  });
+});
+
+router.get("/booking-profile/:counselorId", requireRole("student", "admin", "counselor"), async (req, res) => {
+  const counselorId = Number(req.params.counselorId);
+  const db = getPool();
+  const [users] = await db.query("SELECT full_name, email, role FROM users WHERE id = ?", [counselorId]);
+  const u = users[0];
+  if (!u || u.role !== "counselor") return res.status(404).json({ message: "Counselor not found." });
   const profile = resolveCounselorProfile(u.full_name, u.email);
   res.json({
     windows: profile.windows,
@@ -389,13 +421,15 @@ router.patch("/available-dates/:id", requireRole("counselor"), async (req, res) 
   res.json({ ok: true, sessionDurationMinutes: sessionMinutes });
 });
 
-router.delete("/available-dates/by-date/:date", requireRole("counselor"), async (req, res) => {
+router.delete("/available-dates/by-date/:date", requireRole("counselor", "admin"), async (req, res) => {
+  const target = resolveTargetCounselorId(req);
+  if (target.error) return res.status(400).json({ message: target.error });
   const dateKey = String(req.params.date).slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
     return res.status(400).json({ message: "Invalid date format. Use YYYY-MM-DD." });
   }
   const db = getPool();
-  await clearAvailabilityForDate(db, req.user.id, dateKey);
+  await clearAvailabilityForDate(db, target.id, dateKey);
   res.json({ ok: true, availableDate: dateKey });
 });
 
