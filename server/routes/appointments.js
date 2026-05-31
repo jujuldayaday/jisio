@@ -6,7 +6,8 @@ const { syncAppointmentToSheet } = require("../services/sheetsService");
 const {
   validateStudentBooking,
   appointmentsConflict,
-  blocksInterval
+  blocksInterval,
+  isGcoFullDayUnavailability
 } = require("../config/counselorBooking");
 const { getRenderingSlotsForDate } = require("../services/renderingSchedule");
 const { getDateSlotsForDate } = require("../services/availabilitySchedule");
@@ -99,7 +100,7 @@ router.post("/", requireRole("student"), async (req, res) => {
     [counselorId, date]
   );
   const conflictingBlock = blocked.find((row) => {
-    if (!row.start_time && !row.end_time) return true;
+    if (isGcoFullDayUnavailability(row.start_time, row.end_time)) return true;
     const blockStart = row.start_time ? String(row.start_time).slice(0, 8) : "00:00:00";
     const blockEnd = row.end_time ? String(row.end_time).slice(0, 8) : "23:59:59";
     return blocksInterval(timeHHMM, sessionMinutes, sessionEnd, blockStart, blockEnd);
