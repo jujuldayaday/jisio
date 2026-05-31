@@ -340,6 +340,20 @@ function blocksInterval(timeHHMM, sessionMinutes, sessionEndStr, blockStartStr, 
   return t0 < be && sessionEndStr > bs;
 }
 
+/** GCO whole-day unavailability window (7:00 AM – 5:00 PM). */
+const GCO_FULL_DAY_UNAVAIL_START = "07:00";
+const GCO_FULL_DAY_UNAVAIL_END = "17:00";
+
+function isGcoFullDayUnavailability(startTime, endTime) {
+  if (startTime == null && endTime == null) return true;
+  if (startTime == null || endTime == null) return false;
+  const start = String(startTime).slice(0, 5);
+  const end = String(endTime).slice(0, 5);
+  const s = hhmmToMinutes(start);
+  const e = hhmmToMinutes(end);
+  return s <= hhmmToMinutes(GCO_FULL_DAY_UNAVAIL_START) && e >= hhmmToMinutes(GCO_FULL_DAY_UNAVAIL_END);
+}
+
 module.exports = {
   ALL_GCO_SERVICES,
   BOBBY_SERVICES,
@@ -356,6 +370,9 @@ module.exports = {
   isOfficeBookableDay,
   appointmentsConflict,
   blocksInterval,
+  isGcoFullDayUnavailability,
+  GCO_FULL_DAY_UNAVAIL_START,
+  GCO_FULL_DAY_UNAVAIL_END,
   hhmmToMinutes,
   minutesToHHMM,
   START_GAP_BUFFER_MIN
