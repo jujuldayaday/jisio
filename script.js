@@ -139,6 +139,80 @@ function renderAdminUsersTableRows(users) {
     .join("");
 }
 
+const ADMIN_USERS_PER_PAGE = 10;
+
+function sortUsersById(users) {
+  return [...(users || [])].sort((a, b) => Number(a.id) - Number(b.id));
+}
+
+function getAdminUsersPageData(users, page = 1, perPage = ADMIN_USERS_PER_PAGE) {
+  const sorted = sortUsersById(users);
+  const totalPages = Math.max(1, Math.ceil(sorted.length / perPage));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const start = (safePage - 1) * perPage;
+  return {
+    page: safePage,
+    totalPages,
+    total: sorted.length,
+    rows: sorted.slice(start, start + perPage),
+    rangeStart: sorted.length ? start + 1 : 0,
+    rangeEnd: Math.min(start + perPage, sorted.length)
+  };
+}
+
+function renderAdminUsersPagination(pageData) {
+  const info = `<p class="muted tiny admin-users-page-info">Showing ${pageData.rangeStart}–${pageData.rangeEnd} of ${pageData.total} users</p>`;
+  if (pageData.totalPages <= 1) return info;
+  return `
+    <div class="admin-users-pagination">
+      ${info}
+      <div class="auth-actions admin-users-page-actions">
+        <button type="button" class="btn ghost" id="adminUsersPrev" ${pageData.page <= 1 ? "disabled" : ""}>Previous</button>
+        <span class="muted tiny">Page ${pageData.page} of ${pageData.totalPages}</span>
+        <button type="button" class="btn ghost" id="adminUsersNext" ${pageData.page >= pageData.totalPages ? "disabled" : ""}>Next</button>
+      </div>
+    </div>`;
+}
+
+function wireAdminUsersPagination(root, menu, users) {
+  const prev = document.getElementById("adminUsersPrev");
+  const next = document.getElementById("adminUsersNext");
+  const paintPage = async (page) => {
+    state.adminUsersPage = page;
+    const pageData = getAdminUsersPageData(users, page);
+    const tbody = document.querySelector("#adminUsersTable tbody");
+    const pager = document.getElementById("adminUsersPager");
+    if (tbody) tbody.innerHTML = renderAdminUsersTableRows(pageData.rows);
+    if (pager) pager.innerHTML = renderAdminUsersPagination(pageData);
+    wireAdminDeleteUserButtons(root, menu);
+    wireAdminUsersPagination(root, menu, users);
+    refreshScrollableDataSections(root);
+  };
+  if (prev) prev.onclick = () => paintPage(state.adminUsersPage - 1);
+  if (next) next.onclick = () => paintPage(state.adminUsersPage + 1);
+}
+
+async function refreshCounselorRequestsBadge() {
+  if (state.user?.role !== "counselor") return;
+  try {
+    await loadAppointments();
+    const count = (state.appointments || []).filter((a) => a.status === "pending").length;
+    const badge = document.getElementById("counselorRequestsBadge");
+    if (!badge) return;
+    if (count > 0) {
+      badge.textContent = count > 99 ? "99+" : String(count);
+      badge.classList.remove("hidden");
+      badge.setAttribute("aria-label", `${count} open request${count === 1 ? "" : "s"}`);
+    } else {
+      badge.textContent = "";
+      badge.classList.add("hidden");
+      badge.removeAttribute("aria-label");
+    }
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
 function wireAdminDeleteUserButtons(root, menu) {
   root.querySelectorAll(".admin-delete-user").forEach((btn) => {
     btn.onclick = async () => {
@@ -313,7 +387,8 @@ const state = {
   counselors: [],
   counselorUnavail: [],
   profilePicture: "",
-  lastSeenNotificationCount: Number(localStorage.getItem("gco_last_seen_notif_count") || 0)
+  lastSeenNotificationCount: Number(localStorage.getItem("gco_last_seen_notif_count") || 0),
+  adminUsersPage: 1
 };
 
 const DASHBOARD_MENUS = {
@@ -890,7 +965,11 @@ function renderDashboard(role) {
     btn.type = "button";
     btn.dataset.menuLabel = menu;
     btn.className = `menu-btn ${menu === state.activeMenu ? "active" : ""}`;
-    btn.textContent = menu;
+    if (role === "counselor" && menu === "Requests") {
+      btn.innerHTML = `<span class="menu-btn-label">${menu}</span><span class="menu-badge hidden" id="counselorRequestsBadge"></span>`;
+    } else {
+      btn.textContent = menu;
+    }
     btn.onclick = () => {
       navigateDashboard(role, menu, "push");
     };
@@ -907,7 +986,9 @@ function renderDashboard(role) {
   notificationPollTimer = setInterval(() => {
     if (!state.user) return;
     loadNotifications().catch(() => {});
+    if (state.user.role === "counselor") refreshCounselorRequestsBadge().catch(() => {});
   }, 20000);
+  if (role === "counselor") refreshCounselorRequestsBadge().catch(() => {});
 }
 
 async function refreshSidebarIdentity() {
@@ -2851,7 +2932,16 @@ async function renderCounselorView(root, menu) {
       </div>`;
     };
 
-    const pendingTable = `<div class="table-wrap"><table><thead><tr><th>Code</th><th>Date</th><th>Time</th><th>Status</th><th>Action</th></tr></thead><tbody>${openRequests.map((a) => `<tr><td>${escapeHtml(a.booking_code)}</td><td>${formatDisplayDate(a.appointment_date)}</td><td>${formatDisplayTime(a.appointment_time)}</td><td>${a.status}</td><td><button class="btn primary approve-btn" data-id="${a.id}">Accept</button><button class="btn ghost decline-btn" data-id="${a.id}">Decline</button></td></tr>`).join("") || `<tr><td colspan="5">No open requests</td></tr>`}</tbody></table></div>`;
+    const pendingTable = `<div class="table-wrap"><table><thead><tr><th>Code</th><th>Date</th><th>Time</th><th>Status</th><th>Action</th></tr></thead><tbody>${openRequests.map((a) => {
+      const actions = a.status === "pending"
+        ? `<div class="request-action-group">
+            <button class="btn primary approve-btn" data-id="${a.id}">Accept</button>
+            <button class="btn ghost decline-btn" data-id="${a.id}">Decline</button>
+            <button class="btn ghost reschedule-btn" data-id="${a.id}" data-code="${escapeHtml(a.booking_code)}">Reschedule</button>
+          </div>`
+        : `<span class="muted">—</span>`;
+      return `<tr><td>${escapeHtml(a.booking_code)}</td><td>${formatDisplayDate(a.appointment_date)}</td><td>${formatDisplayTime(a.appointment_time)}</td><td>${a.status}</td><td>${actions}</td></tr>`;
+    }).join("") || `<tr><td colspan="5">No open requests</td></tr>`}</tbody></table></div>`;
 
     const activeTable = `<div class="table-wrap u-mt-section"><table><thead><tr><th>Date / Time</th><th>Student</th><th>Service Type</th><th>Student Cancellation</th><th>Status</th><th>Action</th></tr></thead><tbody>${activeRows.map((a) => `<tr>
       <td>${formatDateTime(a)}</td>
@@ -2886,19 +2976,74 @@ async function renderCounselorView(root, menu) {
         </button>
         <div class="collapsible-body">${closedTable}</div>
       </div>
+      <div id="counselorRescheduleModal" class="modal hidden">
+        <div class="modal-content stack-md">
+          <h3 id="counselorRescheduleTitle">Request reschedule</h3>
+          <p class="muted tiny">The student will be notified to pick a new schedule.</p>
+          <label class="field"><span>Message (optional)</span><textarea id="counselorRescheduleMessage" rows="4" placeholder="e.g. Please choose another date — I am unavailable on this day."></textarea></label>
+          <div class="auth-actions">
+            <button type="button" class="btn ghost" id="counselorRescheduleDismiss">Back</button>
+            <button type="button" class="btn primary" id="counselorRescheduleConfirm">Confirm reschedule</button>
+          </div>
+        </div>
+      </div>
       <p id="counselorRequestsMsg" class="feedback"></p>
     `;
 
     const reqMsg = document.getElementById("counselorRequestsMsg");
-    document.querySelectorAll(".approve-btn").forEach((btn) => (btn.onclick = async () => {
-      try {
-        await api(`/appointments/${btn.dataset.id}/status`, { method: "PATCH", body: JSON.stringify({ status: "accepted" }) });
-        await renderCounselorView(root, menu);
-      } catch (err) { reqMsg.textContent = err.message; reqMsg.className = "feedback feedback-error"; }
-    }));
     document.querySelectorAll(".decline-btn").forEach((btn) => (btn.onclick = async () => {
       try {
         await api(`/appointments/${btn.dataset.id}/status`, { method: "PATCH", body: JSON.stringify({ status: "declined" }) });
+        await refreshCounselorRequestsBadge();
+        await renderCounselorView(root, menu);
+      } catch (err) { reqMsg.textContent = err.message; reqMsg.className = "feedback feedback-error"; }
+    }));
+    const rescheduleModal = document.getElementById("counselorRescheduleModal");
+    const rescheduleMsg = document.getElementById("counselorRescheduleMessage");
+    const rescheduleTitle = document.getElementById("counselorRescheduleTitle");
+    let pendingRescheduleId = null;
+    const closeRescheduleModal = () => {
+      rescheduleModal.classList.add("hidden");
+      rescheduleModal.style.display = "none";
+      pendingRescheduleId = null;
+      rescheduleMsg.value = "";
+    };
+    document.getElementById("counselorRescheduleDismiss").onclick = closeRescheduleModal;
+    rescheduleModal.onclick = (e) => {
+      if (e.target === rescheduleModal) closeRescheduleModal();
+    };
+    document.querySelectorAll(".reschedule-btn").forEach((btn) => {
+      btn.onclick = () => {
+        pendingRescheduleId = btn.dataset.id;
+        rescheduleTitle.textContent = `Reschedule ${btn.dataset.code || "booking"}`;
+        rescheduleMsg.value = "";
+        rescheduleModal.classList.remove("hidden");
+        rescheduleModal.style.display = "flex";
+        rescheduleMsg.focus();
+      };
+    });
+    document.getElementById("counselorRescheduleConfirm").onclick = async () => {
+      if (!pendingRescheduleId) return;
+      const message = rescheduleMsg.value.trim();
+      try {
+        await api(`/appointments/${pendingRescheduleId}/status`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: "reschedule_requested", message: message || undefined })
+        });
+        closeRescheduleModal();
+        reqMsg.textContent = "Reschedule request sent.";
+        reqMsg.className = "feedback status-success";
+        await refreshCounselorRequestsBadge();
+        await renderCounselorView(root, menu);
+      } catch (err) {
+        reqMsg.textContent = err.message;
+        reqMsg.className = "feedback feedback-error";
+      }
+    };
+    document.querySelectorAll(".approve-btn").forEach((btn) => (btn.onclick = async () => {
+      try {
+        await api(`/appointments/${btn.dataset.id}/status`, { method: "PATCH", body: JSON.stringify({ status: "accepted" }) });
+        await refreshCounselorRequestsBadge();
         await renderCounselorView(root, menu);
       } catch (err) { reqMsg.textContent = err.message; reqMsg.className = "feedback feedback-error"; }
     }));
@@ -3377,7 +3522,7 @@ async function renderStudentView(root, menu) {
     const canCancel = (status) => ["pending", "accepted", "reschedule_requested"].includes(String(status).toLowerCase());
     const rowsHtml =
       state.appointments.length === 0
-        ? `<tr><td colspan="6">No appointments yet.</td></tr>`
+        ? `<tr><td colspan="8">No appointments yet.</td></tr>`
         : state.appointments
             .map((a) => {
               const timeDisp = formatDisplayTime(a.appointment_time);
@@ -3388,12 +3533,12 @@ async function renderStudentView(root, menu) {
                 String(a.status).toLowerCase() === "cancelled" && a.student_cancellation_reason
                   ? escapeHtml(a.student_cancellation_reason)
                   : "—";
-              return `<tr><td>${escapeHtml(a.booking_code)}</td><td>${formatDisplayDate(a.appointment_date)}</td><td>${timeDisp}</td><td>${a.status}</td><td class="cancel-reason-cell">${cancelNote}</td><td>${cancelBtn}</td></tr>`;
+              return `<tr><td>${escapeHtml(a.booking_code)}</td><td>${formatDisplayDate(a.appointment_date)}</td><td>${timeDisp}</td><td>${a.status}</td><td>${escapeHtml(a.service_type || "—")}</td><td>${escapeHtml(a.counselor_name || "—")}</td><td class="cancel-reason-cell">${cancelNote}</td><td>${cancelBtn}</td></tr>`;
             })
             .join("");
     root.innerHTML = `
       <div class="panel-header"><h2 class="section-title">Appointment History</h2></div>
-      <div class="table-wrap"><table><thead><tr><th>Code</th><th>Date</th><th>Time</th><th>Status</th><th>Your cancellation reason</th><th>Action</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Code</th><th>Date</th><th>Time</th><th>Status</th><th>Service</th><th>Counselor</th><th>Your cancellation reason</th><th>Action</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
       <div id="studentCancelModal" class="modal hidden">
         <div class="modal-content stack-md">
           <h3 id="studentCancelTitle">Cancel appointment</h3>
@@ -3968,6 +4113,8 @@ async function renderAdminView(root, menu) {
   }
   if (menu === "Users") {
     const users = await api("/admin/users");
+    const pageData = getAdminUsersPageData(users, state.adminUsersPage);
+    state.adminUsersPage = pageData.page;
     root.innerHTML = `
       <div class="panel-header"><h2 class="section-title">User Management</h2></div>
       <div class="card stack-md section-block create-account-card">
@@ -3981,7 +4128,9 @@ async function renderAdminView(root, menu) {
         </form>
         <p id="createAccountMsg" class="create-account-feedback" hidden aria-live="polite"></p>
       </div>
-      <div class="table-wrap" id="adminUsersTable"><table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Action</th></tr></thead><tbody>${renderAdminUsersTableRows(users)}</tbody></table></div><p id="adminUserMsg" class="feedback"></p>`;
+      <div class="table-wrap" id="adminUsersTable"><table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Action</th></tr></thead><tbody>${renderAdminUsersTableRows(pageData.rows)}</tbody></table></div>
+      <div id="adminUsersPager">${renderAdminUsersPagination(pageData)}</div>
+      <p id="adminUserMsg" class="feedback"></p>`;
     attachPasswordToggle(document.getElementById("newUserPassword"), "new user password");
     const adminPassField = document.getElementById("newUserPassword")?.parentElement;
     if (adminPassField) {
@@ -4011,15 +4160,21 @@ async function renderAdminView(root, menu) {
         document.getElementById("createUserForm").reset();
         setCreateAccountFeedback("Account successfully created.", "success");
         const updatedUsers = await api("/admin/users");
+        const latestPage = getAdminUsersPageData(updatedUsers, state.adminUsersPage);
+        state.adminUsersPage = latestPage.page;
         const tbody = document.querySelector("#adminUsersTable tbody");
-        if (tbody) tbody.innerHTML = renderAdminUsersTableRows(updatedUsers);
+        const pager = document.getElementById("adminUsersPager");
+        if (tbody) tbody.innerHTML = renderAdminUsersTableRows(latestPage.rows);
+        if (pager) pager.innerHTML = renderAdminUsersPagination(latestPage);
         wireAdminDeleteUserButtons(root, menu);
+        wireAdminUsersPagination(root, menu, updatedUsers);
         refreshScrollableDataSections(root);
       } catch (err) {
         setCreateAccountFeedback(err.message, "error");
       }
     };
     wireAdminDeleteUserButtons(root, menu);
+    wireAdminUsersPagination(root, menu, users);
     return;
   }
   if (menu === "Appointments") {
