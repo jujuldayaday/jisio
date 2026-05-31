@@ -4926,8 +4926,15 @@ body.dark-mode .menu-badge {
 
 .request-action-group {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+  min-width: 7.5rem;
+}
+
+.request-action-group .btn {
+  width: 100%;
+  justify-content: center;
 }
 
 .admin-users-pagination {
