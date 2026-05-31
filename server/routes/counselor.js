@@ -119,8 +119,10 @@ router.post("/availability", requireRole("counselor"), async (req, res) => {
     return res.status(400).json({ message: "End time must be after start time." });
   }
 
+  const { isGcoFullDayUnavailability } = require("../config/counselorBooking");
   const db = getPool();
-  if (!startT && !endT) {
+  const isWholeDayBlock = isGcoFullDayUnavailability(startT, endT);
+  if (isWholeDayBlock) {
     const [conflicts] = await db.query(
       `SELECT id FROM appointments
        WHERE counselor_id = ? AND appointment_date = ? AND status = 'accepted'
