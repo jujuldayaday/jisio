@@ -264,6 +264,22 @@ function formatDisplayTime(val) {
   return s;
 }
 
+function renderOutcomePill(outcome) {
+  if (!outcome) return "";
+  const o = String(outcome).toLowerCase();
+  const label = o === "no_show" ? "No-show" : o.charAt(0).toUpperCase() + o.slice(1);
+  return `<span class="outcome-pill ${escapeHtml(o)}">${escapeHtml(label)}</span>`;
+}
+
+/** Student history: show counselor outcome (done/referred/no-show) when session is closed. */
+function renderStudentHistoryStatus(a) {
+  if (a.outcome) return renderOutcomePill(a.outcome);
+  const s = String(a.status || "").toLowerCase();
+  const label =
+    s === "reschedule_requested" ? "Reschedule requested" : s ? s.charAt(0).toUpperCase() + s.slice(1) : "—";
+  return `<span class="dash-status-badge status-${escapeHtml(s)}">${escapeHtml(label)}</span>`;
+}
+
 async function downloadWithAuth(path, filename) {
   const headers = {};
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -3519,21 +3535,22 @@ async function renderStudentView(root, menu) {
   }
   if (menu === "Appointment History") {
     await loadAppointments();
-    const canCancel = (status) => ["pending", "accepted", "reschedule_requested"].includes(String(status).toLowerCase());
+    const canCancel = (a) =>
+      !a.outcome && ["pending", "accepted", "reschedule_requested"].includes(String(a.status).toLowerCase());
     const rowsHtml =
       state.appointments.length === 0
         ? `<tr><td colspan="8">No appointments yet.</td></tr>`
         : state.appointments
             .map((a) => {
               const timeDisp = formatDisplayTime(a.appointment_time);
-              const cancelBtn = canCancel(a.status)
+              const cancelBtn = canCancel(a)
                 ? `<button type="button" class="btn ghost student-cancel-appt" data-id="${a.id}" data-code="${escapeHtml(a.booking_code)}">Cancel</button>`
                 : `<span class="muted">—</span>`;
               const cancelNote =
                 String(a.status).toLowerCase() === "cancelled" && a.student_cancellation_reason
                   ? escapeHtml(a.student_cancellation_reason)
                   : "—";
-              return `<tr><td>${escapeHtml(a.booking_code)}</td><td>${formatDisplayDate(a.appointment_date)}</td><td>${timeDisp}</td><td>${a.status}</td><td>${escapeHtml(a.service_type || "—")}</td><td>${escapeHtml(a.counselor_name || "—")}</td><td class="cancel-reason-cell">${cancelNote}</td><td>${cancelBtn}</td></tr>`;
+              return `<tr><td>${escapeHtml(a.booking_code)}</td><td>${formatDisplayDate(a.appointment_date)}</td><td>${timeDisp}</td><td>${renderStudentHistoryStatus(a)}</td><td>${escapeHtml(a.service_type || "—")}</td><td>${escapeHtml(a.counselor_name || "—")}</td><td class="cancel-reason-cell">${cancelNote}</td><td>${cancelBtn}</td></tr>`;
             })
             .join("");
     root.innerHTML = `
