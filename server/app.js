@@ -65,6 +65,10 @@ const sheetsRoutes = require("./routes/sheets");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
+});
+
 const INDEX_HTML_PATH = path.join(PROJECT_ROOT, "index.html");
 
 /** Avoid stale SPA shell: browsers often cache index.html via ETag/304 unless disabled. */
